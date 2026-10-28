@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from pramana_ocr.normalization import normalize_date, normalize_gender, normalize_name
 from pramana_ocr.parser import parse_aadhaar, parse_document, parse_pan
 from pramana_ocr.pipeline import extract_document_fields
+from pramana_ocr.imaging import render_pages
 from pramana_ocr.verification import compare_fields
 
 
@@ -127,6 +130,26 @@ class PipelineTests(unittest.TestCase):
     def test_pipeline_rejects_empty_document(self):
         with self.assertRaisesRegex(ValueError, "document_bytes"):
             extract_document_fields(b"", "image/png", "PAN", recognize_text=lambda *_: "")
+
+
+class DocumentLimitTests(unittest.TestCase):
+    def test_pdf_over_three_pages_is_rejected_before_rendering(self):
+        from pramana_limits import MAX_PDF_PAGES
+
+        class FakePDF:
+            def __len__(self):
+                return MAX_PDF_PAGES + 1
+
+            def close(self):
+                self.closed = True
+
+        pdf = FakePDF()
+        with patch("pramana_ocr.imaging._imports", return_value=(None, None, None)), patch.dict(
+            "sys.modules", {"pypdfium2": SimpleNamespace(PdfDocument=lambda _data: pdf)}
+        ):
+            with self.assertRaisesRegex(ValueError, "no more than 3 pages"):
+                list(render_pages(b"synthetic pdf", "application/pdf"))
+        self.assertTrue(pdf.closed)
 
 
 if __name__ == "__main__":

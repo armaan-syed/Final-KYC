@@ -38,14 +38,18 @@ class FakeBody(io.BytesIO):
 
 
 class FakeS3:
-    def __init__(self, content_type="application/pdf"):
+    def __init__(self, content_type="application/pdf", content_length=None, body=None):
         self.content_type = content_type
-        self.body = FakeBody(b"synthetic document")
+        self.body = FakeBody(body if body is not None else b"synthetic document")
+        self.content_length = content_length
         self.calls = []
 
     def get_object(self, **kwargs):
         self.calls.append(kwargs)
-        return {"Body": self.body, "ContentType": self.content_type}
+        response = {"Body": self.body, "ContentType": self.content_type}
+        if self.content_length is not None:
+            response["ContentLength"] = self.content_length
+        return response
 
 
 class FakeRepository:
@@ -180,6 +184,21 @@ class WorkerProcessingTests(unittest.TestCase):
             )
         self.assertEqual(self.repository.persisted, [])
 
+    def test_document_over_10_mib_is_rejected_and_body_closed(self):
+        from pramana_limits import MAX_DOCUMENT_BYTES
+
+        self.s3 = FakeS3(content_length=MAX_DOCUMENT_BYTES + 1)
+        with self.assertRaisesRegex(ValueError, "10 MiB"):
+            process_job(
+                self.job,
+                s3_client=self.s3,
+                repository=self.repository,
+                notifier=self.notify,
+                extractor=exact_pan,
+            )
+        self.assertTrue(self.s3.body.was_closed)
+        self.assertEqual(self.repository.persisted, [])
+
     def test_attempt_document_type_must_match_message(self):
         self.repository.context = AttemptContext(
             **{**self.repository.context.__dict__, "document_type": "AADHAAR"}
@@ -207,6 +226,45 @@ class LambdaHandlerTests(unittest.TestCase):
         ), patch("pramana_ocr.worker.process_job", side_effect=["AUTO_VERIFIED", RuntimeError("hidden")]):
             result = handler({"Records": [record, invalid]}, None)
         self.assertEqual(result, {"batchItemFailures": [{"itemIdentifier": "message-2"}]})
+
+    def test_final_retry_marks_attempt_review_required_and_keeps_record_for_dlq(self):
+        record = {
+            "messageId": "message-1",
+            "body": message(),
+            "attributes": {"ApproximateReceiveCount": "3"},
+        }
+        repository = FakeRepository()
+        repository.mark_processing_failure = unittest.mock.Mock(return_value=True)
+        with patch.dict(
+            "os.environ",
+            {"DOCUMENTS_BUCKET": BUCKET, "DATABASE_SECRET_ARN": "secret", "AWS_REGION": "us-east-1"},
+        ), patch("pramana_ocr.worker._aws_clients", return_value=(FakeS3(), object(), object())), patch(
+            "pramana_ocr.worker._repository", return_value=repository
+        ), patch("pramana_ocr.worker.process_job", side_effect=RuntimeError("details must not persist")):
+            result = handler({"Records": [record]}, None)
+        self.assertEqual(result, {"batchItemFailures": [{"itemIdentifier": "message-1"}]})
+        repository.mark_processing_failure.assert_called_once()
+        kwargs = repository.mark_processing_failure.call_args.kwargs
+        self.assertEqual(kwargs["error_type"], "RuntimeError")
+        self.assertEqual(kwargs["receive_count"], 3)
+
+    def test_earlier_retry_does_not_mark_attempt_failed(self):
+        record = {
+            "messageId": "message-1",
+            "body": message(),
+            "attributes": {"ApproximateReceiveCount": "2"},
+        }
+        repository = FakeRepository()
+        repository.mark_processing_failure = unittest.mock.Mock()
+        with patch.dict(
+            "os.environ",
+            {"DOCUMENTS_BUCKET": BUCKET, "DATABASE_SECRET_ARN": "secret", "AWS_REGION": "us-east-1"},
+        ), patch("pramana_ocr.worker._aws_clients", return_value=(FakeS3(), object(), object())), patch(
+            "pramana_ocr.worker._repository", return_value=repository
+        ), patch("pramana_ocr.worker.process_job", side_effect=RuntimeError("temporary")):
+            result = handler({"Records": [record]}, None)
+        self.assertEqual(result, {"batchItemFailures": [{"itemIdentifier": "message-1"}]})
+        repository.mark_processing_failure.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 """Cognito JWT validation and identity extraction.
 
-Validates Cognito user pool ID tokens using the JWKS endpoint.
+Validates Cognito user pool access tokens using the JWKS endpoint.
 Supports separate customer and reviewer pools with distinct app clients.
 """
 
@@ -9,10 +9,7 @@ from typing import Any
 
 import requests
 from jose import jwt, JWTError
-from jose.utils import base64url_decode
-
 from app.config import settings
-from app.schemas.auth import ErrorResponse
 from fastapi import HTTPException, status
 
 # In-memory JWKS cache: {pool_id: {"keys": [...], "expires_at": float}}
@@ -60,10 +57,10 @@ def _find_key(jwks: dict[str, Any], kid: str) -> dict[str, Any] | None:
 
 
 def verify_token(token: str, user_pool: str) -> dict[str, Any]:
-    """Verify a Cognito ID token and return its payload.
+    """Verify a Cognito access token and return its payload.
 
     Args:
-        token: The JWT ID token string.
+        token: The Cognito access token string.
         user_pool: Either "customers" or "reviewers".
 
     Returns:
@@ -107,9 +104,8 @@ def verify_token(token: str, user_pool: str) -> dict[str, Any]:
             token,
             public_key,
             algorithms=["RS256"],
-            audience=app_client_id,
             issuer=f"https://cognito-idp.{settings.aws_region}.amazonaws.com/{pool_id}",
-            options={"verify_exp": True, "verify_aud": True, "verify_iss": True},
+            options={"verify_exp": True, "verify_aud": False, "verify_iss": True},
         )
     except JWTError as exc:
         raise HTTPException(
@@ -117,12 +113,18 @@ def verify_token(token: str, user_pool: str) -> dict[str, Any]:
             detail="Invalid or expired token",
         ) from exc
 
-    # Verify token_use is "id" for ID tokens
-    token_use = payload.get("token_use")
-    if token_use != "id":
+    # Cognito access tokens use client_id; ID tokens use aud. The frontend
+    # sends access tokens to FastAPI, so reject ID tokens and bind the token
+    # to the expected app client for this pool explicitly.
+    if payload.get("token_use") != "access":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: not an ID token",
+            detail="Invalid token: not an access token",
+        )
+    if payload.get("client_id") != app_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token: wrong app client",
         )
 
     return payload

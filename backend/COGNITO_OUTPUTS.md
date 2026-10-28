@@ -16,9 +16,9 @@ file.
 - OAuth authorization-code flow and `http://localhost:3000/` callback are
   configured for development. Replace/add production callback URLs only after
   Person C provides the final frontend origin.
-- Backend-supported flows include `USER_PASSWORD_AUTH`, `USER_AUTH`, SRP, and
-  refresh-token auth. Token revocation is enabled; refresh-token rotation is
-  currently disabled to match the backend's `REFRESH_TOKEN_AUTH` endpoint.
+- Live client inspection on 2026-10-29 found `ALLOW_USER_SRP_AUTH` and refresh
+  auth enabled; customer password auth is also enabled but not used by the
+  application. Amplify SRP owns sign-in/session refresh/sign-out for both roles.
 - The customer pool has immutable custom attributes `date_of_birth`,
   `address_line1`, `address_line2`, `city`, `state`, and `pincode`. `gender` is
   the standard Cognito attribute (not `custom:gender`).
@@ -36,12 +36,16 @@ file.
 
 ## Integration notes
 
-- Backend FastAPI validates ID-token signature, `iss`, `aud`, `exp`, and
-  `token_use` against the matching pool/client. Customer and reviewer pools are
-  distinct; a valid token from one pool is not accepted for the other.
-- Person A's VPC currently has no Cognito interface endpoint or NAT. Public
-  frontend sign-in is separate, but private backend Lambda JWKS and Cognito API
-  calls will fail until Person A's endpoint plan is deployed.
+- Backend FastAPI validates Cognito access-token signature, `iss`, `exp`,
+  `token_use=access`, and the matching pool's `client_id`. Access tokens use
+  `client_id`; ID-token `aud` validation is not the token contract. Customer and
+  reviewer pools are distinct; a valid token from one pool is rejected by the
+  other role's dependency.
+- Person A deployed outbound-only IPv6 egress without NAT or interface
+  endpoints. A temporary read-only Lambda in the private subnets successfully
+  called Cognito APIs and fetched required public AWS service APIs. The probe
+  stack is being deleted. This proves the network route, not the deployed API
+  Lambda integration.
 - The pool resources pre-existed outside the current CloudFormation stacks.
   Their configuration was inspected and updated in place; do not create
   replacement pools. Future resource import/stack ownership should be coordinated

@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.routers import auth
-from app.schemas.auth import CustomerRegisterRequest, LoginRequest
+from app.schemas.auth import CustomerRegisterRequest
 
 
 def _registration_request(**overrides):
@@ -46,27 +46,6 @@ def test_register_sends_nonempty_optional_address_line2(monkeypatch):
 
     attrs = {item["Name"]: item["Value"] for item in sign_up.call_args.kwargs["UserAttributes"]}
     assert attrs["custom:address_line2"] == "Apartment 2"
-
-
-def test_login_uses_configured_public_password_flow(monkeypatch):
-    initiate_auth = MagicMock(
-        return_value={
-            "AuthenticationResult": {
-                "AccessToken": "access",
-                "RefreshToken": "refresh",
-                "IdToken": "id",
-                "ExpiresIn": 3600,
-            }
-        }
-    )
-    monkeypatch.setattr(auth.cognito_idp, "initiate_auth", initiate_auth)
-
-    response = auth.login(
-        LoginRequest(email="customer@example.com", password="LocalOnly#123")
-    )
-
-    assert response.id_token == "id"
-    assert initiate_auth.call_args.kwargs["AuthFlow"] == "USER_PASSWORD_AUTH"
 
 
 @pytest.mark.parametrize("date_of_birth", ["1990-2-03", "1990-02-30", "not-a-date"])

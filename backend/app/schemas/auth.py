@@ -46,33 +46,5 @@ class ConfirmRegistrationResponse(BaseModel):
     customer_id: str
 
 
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class LoginResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    id_token: str
-    token_type: str = "Bearer"
-    expires_in: int
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
-class RefreshResponse(BaseModel):
-    access_token: str
-    id_token: str
-    token_type: str = "Bearer"
-    expires_in: int
-
-
-class LogoutResponse(BaseModel):
-    message: str
-
-
 class ErrorResponse(BaseModel):
     detail: str

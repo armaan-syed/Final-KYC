@@ -1,6 +1,7 @@
 """Backend-facing adapter for the notification package shared with the worker."""
 
 import boto3
+from botocore.config import Config
 from pramana_notifications import (
     auto_verified_email,
     rejection_sms_message,
@@ -11,8 +12,9 @@ from pramana_notifications import (
 
 from app.config import settings
 
-sns_client = boto3.client("sns", region_name=settings.aws_region)
-ses_client = boto3.client("ses", region_name=settings.aws_region)
+_dualstack = Config(use_dualstack_endpoint=True)
+sns_client = boto3.client("sns", region_name=settings.aws_region, config=_dualstack)
+ses_client = boto3.client("ses", region_name=settings.aws_region, config=_dualstack)
 
 
 def send_sms(phone_number: str, message: str) -> bool:

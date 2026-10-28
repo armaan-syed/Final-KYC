@@ -252,3 +252,67 @@ class PostgresRepository:
             return True
         finally:
             connection.close()
+
+    def mark_processing_failure(
+        self,
+        *,
+        job: OCRJob,
+        error_type: str,
+        receive_count: int,
+    ) -> bool:
+        """Move a repeatedly failing attempt to REVIEW_REQUIRED before DLQ routing."""
+        connection = self._connect()
+        try:
+            with connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT a.status, a.kyc_case_id::text, c.customer_id::text,
+                               d.s3_bucket, d.s3_key
+                        FROM kyc_attempts AS a
+                        JOIN kyc_cases AS c ON c.id = a.kyc_case_id
+                        JOIN kyc_documents AS d ON d.attempt_id = a.id
+                        WHERE a.id = %s
+                        FOR UPDATE OF a, c
+                        """,
+                        (job.kyc_attempt_id,),
+                    )
+                    row = cursor.fetchone()
+                    if row is None:
+                        raise LookupError("attempt or uploaded document disappeared")
+                    current_status, case_id, customer_id, bucket, key = row
+                    if (
+                        case_id != job.kyc_case_id
+                        or customer_id != job.customer_id
+                        or bucket != job.s3_bucket
+                        or key != job.s3_key
+                    ):
+                        raise ValueError("SQS identities do not match the persisted KYC records")
+                    if current_status != "PROCESSING":
+                        return False
+
+                    cursor.execute(
+                        "UPDATE kyc_attempts SET status = 'REVIEW_REQUIRED', completed_at = now() WHERE id = %s",
+                        (job.kyc_attempt_id,),
+                    )
+                    cursor.execute(
+                        "UPDATE kyc_cases SET status = 'REVIEW_REQUIRED', updated_at = now() WHERE id = %s",
+                        (job.kyc_case_id,),
+                    )
+                    details = json.dumps(
+                        {
+                            "failure_code": "OCR_RETRY_LIMIT",
+                            "error_type": str(error_type)[:100],
+                            "receive_count": receive_count,
+                        }
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO audit_events (kyc_case_id, attempt_id, actor, action, details)
+                        VALUES (%s, %s, 'SYSTEM', 'REVIEW_REQUIRED', %s::jsonb)
+                        """,
+                        (job.kyc_case_id, job.kyc_attempt_id, details),
+                    )
+            return True
+        finally:
+            connection.close()

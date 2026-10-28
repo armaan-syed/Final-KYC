@@ -19,10 +19,13 @@ os.environ.setdefault("COGNITO_REVIEWER_APP_CLIENT_ID", "reviewer-client")
 os.environ.setdefault("S3_DOCUMENTS_BUCKET", "pramana-documents-test")
 os.environ.setdefault("SQS_QUEUE_URL", "https://sqs.us-east-1.amazonaws.com/123456789012/pramana-ocr")
 
-from app.services.sqs import enqueue_ocr_job
+from app.services.sqs import enqueue_ocr_job, sqs_client
 
 
 class SQSContractTests(unittest.TestCase):
+    def test_client_uses_dualstack_public_endpoint(self):
+        self.assertEqual(sqs_client.meta.endpoint_url, "https://sqs.us-east-1.api.aws")
+
     def test_standard_queue_message_matches_worker_contract(self):
         with patch("app.services.sqs.sqs_client.send_message", return_value={"MessageId": "message-id"}) as send:
             result = enqueue_ocr_job(

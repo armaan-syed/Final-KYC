@@ -35,8 +35,8 @@ Production-ready Next.js 14 App Router frontend for the Pramāṇa Automated KYC
 The frontend includes mock adapters so that the UI can be run and tested without active AWS credentials:
 - **Toggle**: Controlled via `NEXT_PUBLIC_USE_MOCKS=true` in `frontend/.env.local` or `.env.example`.
 - **When `NEXT_PUBLIC_USE_MOCKS=false`**:
-  - `src/lib/auth.ts` calls AWS Amplify Cognito (`signUp`, `signIn`, `confirmSignUp`).
-  - `src/lib/api.ts` makes real Axios calls to Person B's FastAPI endpoints (`/auth`, `/customer`, `/kyc`, `/reviewer`).
+  - `src/lib/auth.ts` uses Amplify Cognito for customer/reviewer sign-in, access-token sessions, refresh, and sign-out.
+  - `src/lib/api.ts` uses FastAPI for customer registration/confirmation and protected `/customer`, `/kyc`, and `/reviewer` calls.
   - S3 upload directly PUTs the document to the presigned S3 URL.
 
 ---
@@ -45,9 +45,9 @@ The frontend includes mock adapters so that the UI can be run and tested without
 
 | Feature | Mock in Code | Real Endpoint (Person B) / Resource (Person A) | Request / Payload |
 |---|---|---|---|
-| Customer Registration | `registerCustomer` in `auth.ts` | `POST /auth/register` | `RegisterRequest` (name, dob, gender, phone, email, password, address) |
-| Email Confirmation | `confirmCustomerEmail` in `auth.ts` | `POST /auth/confirm` | `{ email, confirmation_code }` |
-| Login (Customer/Reviewer) | `loginUser` in `auth.ts` | `POST /auth/login` | `{ email, password }` |
+| Customer Registration | `apiRegister` in `api.ts` | `POST /auth/register` | `{ full_name, date_of_birth, gender, phone_number, email, password, address_line1, address_line2?, city, state, pincode }` |
+| Email Confirmation | `apiConfirm` in `api.ts` | `POST /auth/confirm` | `{ email, confirmation_code }` |
+| Login (Customer/Reviewer) | `loginUser` in `auth.ts` | Amplify Cognito SRP (no backend login route) | `{ email, password }`; role selects the configured pool/client |
 | Customer Profile | `apiGetProfile` in `api.ts` | `GET /customer/profile` | Bearer token |
 | KYC Status | `apiGetKYCStatus` in `api.ts` | `GET /customer/kyc/status` | Bearer token |
 | Presigned Upload URL | `apiGetUploadUrl` in `api.ts` | `POST /kyc/upload-url` | `{ document_type, file_name, content_type }` |
@@ -57,6 +57,12 @@ The frontend includes mock adapters so that the UI can be run and tested without
 | Review Queue | `apiGetReviewQueue` in `api.ts` | `GET /reviewer/queue` | Reviewer Bearer token |
 | Case Detail | `apiGetCaseDetail` in `api.ts` | `GET /reviewer/cases/{case_id}` | Reviewer Bearer token |
 | Submit Decision | `apiSubmitDecision` in `api.ts` | `POST /reviewer/cases/{case_id}/decide` | `{ decision: 'APPROVED' \| 'REJECTED' \| 'REUPLOAD_REQUESTED', notes }` |
+
+The frontend sends Cognito **access tokens** on protected calls. FastAPI
+validates the pool issuer, signature, expiry, `token_use`, and app-client ID;
+the API Gateway REST API does not add another authorizer. The backend does not
+issue or refresh tokens. The upload contract accepts JPEG/PNG/PDF up to 10 MiB
+and a maximum of 3 PDF pages.
 
 ---
 

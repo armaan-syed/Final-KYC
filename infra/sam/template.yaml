@@ -1,20 +1,20 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Pramana shared private network and processing foundation — keeps public egress
-  disabled by default and uses private AWS service endpoints where configured.
+  Pramana shared private network and processing foundation — keeps IPv4 NAT
+  disabled and uses outbound-only IPv6 for required public AWS service APIs.
 
 Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
-    arch: Private VPC/RDS -> Lambda; standard SQS -> OCR Lambda; private S3 -> CloudFront OAC when enabled; no NAT by default
+    arch: Private VPC/RDS -> Lambda; standard SQS -> OCR Lambda; private S3 -> CloudFront OAC when enabled; no NAT; outbound-only IPv6 API access
     must:
       - Only POST /kyc/submit enqueues OCR; do not add an S3 event trigger
       - Keep the RDS database in private subnets; allow PostgreSQL ingress only from the two Lambda security groups
       - Document bucket blocks public access and requires TLS; OCR reads only documents/*
       - Person B and Person C administrator access stays unchanged until Person A removes it manually
-      - Keep NAT disabled by default; review cost and runtime need before enabling public egress
-      - Add required private AWS service endpoints before enabling VPC Lambdas that call AWS APIs
+      - Keep NAT disabled; route Lambda IPv6 egress only through an egress-only internet gateway
+      - Limit Lambda IPv6 egress to TLS 443; keep PostgreSQL ingress restricted to Lambda security groups
     ref:
       - at: infra/README.md
         has: SAM resources, private network egress, build steps, deployment gate, and open contracts
@@ -127,6 +127,24 @@ Resources:
         - Key: Project
           Value: !Ref ProjectName
 
+  ProjectVPCIpv6CidrBlock:
+    Type: AWS::EC2::VPCCidrBlock
+    Properties:
+      VpcId: !Ref ProjectVPC
+      AmazonProvidedIpv6CidrBlock: true
+
+  LambdaEgressOnlyInternetGateway:
+    Type: AWS::EC2::EgressOnlyInternetGateway
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Enables outbound-only IPv6 access to the AWS public API endpoints required by private Lambdas without a fixed hourly gateway charge.
+        must:
+          - Do not add an IPv4 NAT gateway or internet-gateway route for private subnets.
+          - Keep Lambda security-group IPv6 egress limited to TCP 443.
+        mutable: change-with-constraints
+    Properties:
+      VpcId: !Ref ProjectVPC
+
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Condition: NatGatewayEnabled
@@ -199,6 +217,20 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-private-b'
+
+  PrivateSubnetAIpv6CidrBlock:
+    Type: AWS::EC2::SubnetCidrBlock
+    DependsOn: ProjectVPCIpv6CidrBlock
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      Ipv6CidrBlock: !Select [0, !Cidr [!Select [0, !GetAtt ProjectVPC.Ipv6CidrBlocks], 256, 64]]
+
+  PrivateSubnetBIpv6CidrBlock:
+    Type: AWS::EC2::SubnetCidrBlock
+    DependsOn: ProjectVPCIpv6CidrBlock
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      Ipv6CidrBlock: !Select [1, !Cidr [!Select [0, !GetAtt ProjectVPC.Ipv6CidrBlocks], 256, 64]]
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -279,6 +311,22 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NatGateway
 
+  PrivateIpv6DefaultRouteA:
+    Type: AWS::EC2::Route
+    DependsOn: PrivateSubnetAIpv6CidrBlock
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationIpv6CidrBlock: ::/0
+      EgressOnlyInternetGatewayId: !Ref LambdaEgressOnlyInternetGateway
+
+  PrivateIpv6DefaultRouteB:
+    Type: AWS::EC2::Route
+    DependsOn: PrivateSubnetBIpv6CidrBlock
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      DestinationIpv6CidrBlock: ::/0
+      EgressOnlyInternetGatewayId: !Ref LambdaEgressOnlyInternetGateway
+
   PrivateSubnetRouteTableAssociationA:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -325,6 +373,10 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIpv6: ::/0
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-ocr-lambda-sg'
@@ -337,6 +389,10 @@ Resources:
       SecurityGroupEgress:
         - IpProtocol: '-1'
           CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIpv6: ::/0
       Tags:
         - Key: Name
           Value: !Sub '${ProjectName}-${Environment}-backend-lambda-sg'
@@ -796,12 +852,14 @@ Resources:
         SubnetIds:
           - !Ref PrivateSubnetA
           - !Ref PrivateSubnetB
+        Ipv6AllowedForDualStack: true
       Environment:
         Variables:
           DOCUMENTS_BUCKET: !Ref DocumentBucket
           DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
           DATABASE_NAME: !Ref DatabaseName
           SES_SENDER_EMAIL: !Ref SESSenderEmail
+          OCR_MAX_RECEIVE_COUNT: '3'
           PATH: /opt/bin:/var/lang/bin:/usr/local/bin:/usr/bin:/bin
           LD_LIBRARY_PATH: /opt/lib:/lib64:/usr/lib64
           TESSDATA_PREFIX: /opt/tesseract/share/tessdata
@@ -961,18 +1019,30 @@ Outputs:
   VPCId:
     Description: Shared private VPC ID for Person B's RDS and backend Lambda.
     Value: !Ref ProjectVPC
+  VPCIpv6CidrBlock:
+    Description: Amazon-provided IPv6 block assigned to the shared VPC.
+    Value: !Select [0, !GetAtt ProjectVPC.Ipv6CidrBlocks]
+  LambdaEgressOnlyInternetGatewayId:
+    Description: Egress-only IPv6 gateway shared by the two private subnets.
+    Value: !Ref LambdaEgressOnlyInternetGateway
   PrivateSubnetIds:
     Description: Comma-separated private subnet IDs for Person B's RDS subnet group and backend Lambda.
     Value: !Join [',', [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
   PrivateSubnetAId:
     Description: First private subnet ID, in the first selected Availability Zone.
     Value: !Ref PrivateSubnetA
+  PrivateSubnetAIpv6CidrBlock:
+    Description: IPv6 CIDR assigned to the first private subnet.
+    Value: !Select [0, !GetAtt PrivateSubnetA.Ipv6CidrBlocks]
   PrivateSubnetAAvailabilityZone:
     Description: Availability Zone containing PrivateSubnetA.
     Value: !GetAtt PrivateSubnetA.AvailabilityZone
   PrivateSubnetBId:
     Description: Second private subnet ID, in a different selected Availability Zone.
     Value: !Ref PrivateSubnetB
+  PrivateSubnetBIpv6CidrBlock:
+    Description: IPv6 CIDR assigned to the second private subnet.
+    Value: !Select [0, !GetAtt PrivateSubnetB.Ipv6CidrBlocks]
   PrivateSubnetBAvailabilityZone:
     Description: Availability Zone containing PrivateSubnetB.
     Value: !GetAtt PrivateSubnetB.AvailabilityZone

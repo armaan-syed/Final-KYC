@@ -3,7 +3,7 @@
 `infra/sam/template.yaml` defines the shared foundation and OCR worker. It currently includes:
 
 - A private VPC with two private subnets and no NAT gateway by default, private Lambda security groups, and a database security group that accepts PostgreSQL only from the backend and OCR Lambda groups.
-- A free S3 gateway endpoint. No interface endpoints are deployed yet; private backend/worker calls to Secrets Manager, SQS, SNS, SES, and Cognito need the corresponding approved endpoints before cloud runtime integration.
+- A free S3 gateway endpoint and an egress-only IPv6 Internet Gateway for private subnet outbound HTTPS. NAT and paid interface endpoints are not deployed. A temporary Lambda in the private subnets passed read-only connectivity checks to Secrets Manager, SQS, SNS, Cognito, and SES on 2026-10-29.
 - A private, versioned, SSE-S3 document bucket with access logging, TLS-only bucket policy, and CORS for the CloudFront origin.
 - A private frontend bucket; CloudFront OAC is conditional and currently disabled pending AWS account verification.
 - An encrypted standard OCR queue and DLQ. `POST /kyc/submit` is the only producer; do not add an S3 event trigger.
@@ -21,7 +21,7 @@ Person B owns Cognito pools, RDS and its secret, the FastAPI/API Gateway compone
 - Backend Lambda security group: `sg-02823dd2442632bed`
 - OCR worker security group: `sg-0751ba5b887acb41c`
 
-The database security group allows TCP 5432 only from the backend and worker security groups. NAT and public routes have been removed. Person B can proceed with private RDS; private Lambda SDK calls need service endpoints before AWS cloud integration.
+The database security group allows TCP 5432 only from the backend and worker security groups. NAT and public routes have been removed. The VPC has `2600:1f18:4020:8800::/56`; its two private subnets use `2600:1f18:4020:8800::/64` and `2600:1f18:4020:8801::/64`. Both private route tables send IPv6 default traffic through egress-only gateway `eigw-0e03c52bb1008d130`. Lambda security groups limit IPv6 egress to TCP 443; their pre-existing IPv4 default egress has no public IPv4 route in these private subnets. The backend and OCR Lambda service path still needs verification from those actual functions after deployment.
 
 ## Build and validate locally
 
@@ -54,10 +54,10 @@ W1030 is excluded because these templates accept existing secret/sender ARNs as 
 
 The optional PostgreSQL integration test requires a dedicated, migrated test database and `PRAMANA_TEST_DATABASE_URL`. It creates and removes rows with fresh UUIDs. Never point it at a shared or production database.
 
-The current root template passes basic `sam validate`, `cfn-lint` 1.58.0 with W1030 excluded for caller-supplied ARN `String` parameters, and AWS `validate-template`. The deployed no-NAT update was reviewed and executed as a CloudFormation change set. `cfn-guard` was installed and used to scan the original deployment scope. The current AWS resource state and change-set evidence are recorded in `implementation/PERSON_A_IMPLEMENTATION_PLAN.md`.
+The current root template passes basic `sam validate`, `cfn-lint` 1.58.0 with W1030 excluded for caller-supplied ARN `String` parameters, and AWS `validate-template`. Both no-NAT and IPv6 changes were reviewed and executed as CloudFormation change sets. `cfn-guard` was used for the focused network rules. Current AWS resource state and change-set evidence are in `implementation/PERSON_A_IMPLEMENTATION_PLAN.md`.
 
 The current Lambda-runtime worker proof passed on synthetic PAN/Aadhaar images and Aadhaar PDF. Combined code/layers are 258,176,462 bytes (3,967,538 bytes below the 262,144,000-byte quota); the 93,834,078-byte layer ZIP must be uploaded through S3. Keep this narrow size margin in view when dependencies or SAM packaging change.
 
 ## Deployment review gate
 
-Review every future CloudFormation change set before execution. NAT is disabled by default and has been removed from the deployed stack; interface endpoints also have hourly charges, so add only the services and AZs required for an agreed runtime path. CloudFront remains disabled pending AWS account verification. Do not change teammate IAM access or commit credentials.
+Review every future CloudFormation change set before execution. NAT is disabled and absent from the deployed stack. Four interface endpoints across two AZs would add about $58.40/month in fixed hourly charges, so retain the verified IPv6 path unless a measured requirement justifies that cost. CloudFront remains disabled pending AWS account verification. Do not change teammate IAM access or commit credentials.

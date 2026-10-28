@@ -28,7 +28,7 @@ backend/
       verification.py     ← OCR worker message contract (shared with Person A)
       reviewer.py         ← Reviewer dashboard, queue, decision, audit schemas
     routers/
-      auth.py             ← POST /auth/register, confirm, login, refresh, logout
+      auth.py             ← POST /auth/register and /auth/confirm; Cognito profile bootstrap
       customer.py         ← GET/PUT /customer/profile, GET /customer/kyc/status
       kyc.py              ← POST /kyc/upload-url, submit, GET /kyc/attempts
       reviewer.py         ← GET /reviewer/dashboard, queue, cases, decide, audit
@@ -58,9 +58,12 @@ backend/
 |--------|------|-------------|
 | POST | `/auth/register` | Register new customer in Cognito |
 | POST | `/auth/confirm` | Confirm registration + create RDS customer row |
-| POST | `/auth/login` | Login — returns Cognito tokens |
-| POST | `/auth/refresh` | Refresh access token |
-| POST | `/auth/logout` | Sign out (requires customer JWT) |
+
+Amplify Auth owns customer/reviewer sign-in, token refresh, and sign-out. The
+frontend sends Cognito access tokens to protected API routes; FastAPI validates
+the signature, pool issuer, expiry, `token_use`, and app-client ID before
+applying customer/reviewer authorization. The backend does not issue custom
+JWTs or duplicate Cognito sessions.
 
 ### Customer (customer JWT)
 | Method | Path | Description |
@@ -154,11 +157,13 @@ the shared VPC and database security group. The dev stack is now deployed as
 `db.t4g.micro`, 20 GiB, single-AZ, and has one-day automated backup retention to
 fit the account's Free Plan. It is encrypted and not publicly accessible.
 
-The AWS-managed database secret is created, but private Lambdas cannot retrieve
-it or call Cognito/SQS/SNS/SES until Person A adds and approves the required VPC
-interface endpoints. The local workstation also has no private route to RDS, so
-the Alembic migration is not yet applied. Do not deploy the API/worker before
-that connectivity and migration step are complete.
+Person A deployed outbound-only IPv6 egress without NAT or interface endpoints.
+A temporary read-only Lambda in the same private subnets successfully called
+Secrets Manager, SQS, SNS, Cognito, and SES APIs. This verifies the service
+network path, not B's deployed backend Lambda, secret retrieval, RDS connection,
+or migration. The workstation has no route to private RDS, so apply the Alembic
+migration from a controlled runner inside the approved VPC before API/worker
+deployment.
 
 For any new environment, obtain and review:
 
@@ -177,10 +182,12 @@ ordinary CloudFormation parameter or source-controlled setting.
 
 `template.yaml` consumes the database secret ARN, private subnet IDs, backend
 Lambda security group, SQS queue ARN/URL, SES identity ARN, Cognito settings,
-and Person A's shared notifications layer ARN. It does not create a duplicate
-notifications layer. It is a component template, not approval to deploy a
-second shared network stack. Confirm the root-template/API Gateway authorizer
-design with Person A before integration.
+and Person A's shared notifications layer ARN. It sets
+`Ipv6AllowedForDualStack: true` and uses dual-stack endpoints for SQS/SNS/SES.
+It does not create a duplicate notifications layer. FastAPI is the authorization
+boundary for customer/reviewer routes; API Gateway remains a proxy without a
+second authorizer. Share the B-owned change set with Person A for review before
+execution.
 
 ## Coordination with Person A
 
@@ -203,6 +210,7 @@ Never put the database password in this README, chat, or source control.
 - Cognito secrets are never in `NEXT_PUBLIC_*` variables
 - S3 keys are server-derived (no client-controlled paths)
 - Presigned URLs are short-lived
-- JWTs verified via Cognito JWKS with issuer/audience/expiry checks
+- Cognito access tokens verified via JWKS, issuer, expiry, `token_use`, and the
+  selected pool's app-client ID
 - Audit events are append-only (no update/delete endpoints)
 - Rejection SMS contains no sensitive details (portal-only)

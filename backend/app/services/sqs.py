@@ -8,6 +8,7 @@ import json
 import logging
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from app.config import settings
@@ -15,7 +16,11 @@ from app.schemas.verification import OCRWorkerMessage
 
 logger = logging.getLogger(__name__)
 
-sqs_client = boto3.client("sqs", region_name=settings.aws_region)
+sqs_client = boto3.client(
+    "sqs",
+    region_name=settings.aws_region,
+    config=Config(use_dualstack_endpoint=True),
+)
 
 
 def enqueue_ocr_job(

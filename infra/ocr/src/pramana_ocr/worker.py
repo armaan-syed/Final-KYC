@@ -13,12 +13,14 @@ from uuid import UUID
 
 from .pipeline import extract_document_fields
 from .verification import compare_fields
+from .limits import MAX_DOCUMENT_BYTES
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
 _ALLOWED_DOCUMENT_TYPES = {"AADHAAR", "PAN"}
 _ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "application/pdf"}
+_MAX_RECEIVE_COUNT = int(os.environ.get("OCR_MAX_RECEIVE_COUNT", "3"))
 _UUID = re.compile(r"^[0-9a-fA-F-]{36}$")
 
 
@@ -118,7 +120,12 @@ def process_job(
     response = s3_client.get_object(Bucket=job.s3_bucket, Key=job.s3_key)
     body = response["Body"]
     try:
-        document_bytes = body.read()
+        content_length = response.get("ContentLength")
+        if content_length is not None and int(content_length) > MAX_DOCUMENT_BYTES:
+            raise ValueError("document exceeds the 10 MiB upload limit")
+        document_bytes = body.read(MAX_DOCUMENT_BYTES + 1)
+        if len(document_bytes) > MAX_DOCUMENT_BYTES:
+            raise ValueError("document exceeds the 10 MiB upload limit")
     finally:
         body.close()
 
@@ -175,19 +182,24 @@ def process_job(
 @lru_cache(maxsize=1)
 def _aws_clients(region: str) -> tuple[Any, Any, Any]:
     import boto3
+    from botocore.config import Config
 
+    dualstack = Config(use_dualstack_endpoint=True)
     return (
         boto3.client("s3", region_name=region),
         boto3.client("secretsmanager", region_name=region),
-        boto3.client("sns", region_name=region),
+        boto3.client("sns", region_name=region, config=dualstack),
     )
 
 
 @lru_cache(maxsize=1)
 def _ses_client(region: str) -> Any:
     import boto3
+    from botocore.config import Config
 
-    return boto3.client("ses", region_name=region)
+    return boto3.client(
+        "ses", region_name=region, config=Config(use_dualstack_endpoint=True)
+    )
 
 
 @lru_cache(maxsize=1)
@@ -232,6 +244,7 @@ def handler(event: Mapping[str, Any], _context: Any) -> dict[str, list[dict[str,
     failures: list[dict[str, str]] = []
     for record in event.get("Records", []):
         message_id = str(record.get("messageId", ""))
+        job: OCRJob | None = None
         try:
             job = OCRJob.from_message(record.get("body", ""), expected_bucket)
             process_job(
@@ -241,6 +254,24 @@ def handler(event: Mapping[str, Any], _context: Any) -> dict[str, list[dict[str,
                 notifier=_send_auto_verified,
             )
         except Exception as exc:
+            attributes = record.get("attributes", {})
+            try:
+                receive_count = int(attributes.get("ApproximateReceiveCount", "1"))
+            except (TypeError, ValueError):
+                receive_count = 1
+            if job is not None and receive_count >= _MAX_RECEIVE_COUNT:
+                try:
+                    repository.mark_processing_failure(
+                        job=job,
+                        error_type=type(exc).__name__,
+                        receive_count=receive_count,
+                    )
+                except Exception as mark_exc:
+                    logger.error(
+                        "Unable to persist final OCR failure attempt_id=%s error_type=%s",
+                        job.kyc_attempt_id,
+                        type(mark_exc).__name__,
+                    )
             logger.error(
                 "OCR SQS record failed message_id=%s error_type=%s",
                 message_id,

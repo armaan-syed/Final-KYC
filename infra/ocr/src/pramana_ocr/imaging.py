@@ -7,6 +7,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from .limits import MAX_PDF_PAGES
+
 
 def _imports():
     try:
@@ -31,6 +33,8 @@ def render_pages(document_bytes: bytes, content_type: str) -> Iterator[object]:
             raise RuntimeError("PDF rendering dependency is missing from the Lambda layer") from exc
         pdf = pdfium.PdfDocument(document_bytes)
         try:
+            if len(pdf) > MAX_PDF_PAGES:
+                raise ValueError(f"PDF must contain no more than {MAX_PDF_PAGES} pages")
             for page in pdf:
                 bitmap = page.render(scale=2)
                 image = np.asarray(bitmap.to_numpy()).copy()

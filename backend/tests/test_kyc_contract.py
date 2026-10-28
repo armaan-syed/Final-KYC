@@ -108,7 +108,11 @@ class KYCContractTests(unittest.TestCase):
             db.events.append("enqueue")
             return "message-id"
 
-        with patch.object(kyc_service, "enqueue_ocr_job", side_effect=enqueue):
+        with patch.object(
+            kyc_service,
+            "inspect_uploaded_document",
+            return_value={"content_length": 1234, "content_type": "application/pdf"},
+        ), patch.object(kyc_service, "enqueue_ocr_job", side_effect=enqueue):
             result = service.submit_kyc(
                 customer=customer,
                 case=case,
@@ -119,6 +123,9 @@ class KYCContractTests(unittest.TestCase):
             )
         self.assertEqual(result.status, "PROCESSING")
         self.assertLess(db.events.index("commit"), db.events.index("enqueue"))
+        document = next(item for item in db.added if isinstance(item, KYCDocument))
+        self.assertEqual(document.file_size_bytes, 1234)
+        self.assertEqual(document.content_type, "application/pdf")
 
     def test_reupload_decision_maps_case_and_attempt_statuses_separately(self):
         customer = SimpleNamespace(

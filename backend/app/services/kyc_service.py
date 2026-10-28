@@ -24,7 +24,11 @@ from app.services.notification import (
     send_email,
     send_sms,
 )
-from app.services.s3 import derive_s3_key, generate_presigned_upload_url
+from app.services.s3 import (
+    derive_s3_key,
+    generate_presigned_upload_url,
+    inspect_uploaded_document,
+)
 from app.services.sqs import enqueue_ocr_job
 
 logger = logging.getLogger(__name__)
@@ -138,9 +142,12 @@ class KYCService:
         if attempt.document_type != document_type:
             raise ValueError("Document type does not match the attempt")
 
+        s3_key = derive_s3_key(str(customer.id), str(attempt.id), file_name)
+        uploaded_document = inspect_uploaded_document(s3_key)
+
         # Create/update document row
         existing_doc = self.db.query(KYCDocument).filter_by(attempt_id=attempt.id).first()
-        s3_key = derive_s3_key(str(customer.id), str(attempt.id), file_name)
+        actual_file_size = int(uploaded_document["content_length"])
 
         if existing_doc is None:
             document = KYCDocument(
@@ -148,13 +155,15 @@ class KYCService:
                 s3_bucket=settings.s3_documents_bucket,
                 s3_key=s3_key,
                 file_name=file_name,
-                file_size_bytes=file_size_bytes,
+                file_size_bytes=actual_file_size,
+                content_type=str(uploaded_document["content_type"]),
             )
             self.db.add(document)
         else:
             existing_doc.s3_key = s3_key
             existing_doc.file_name = file_name
-            existing_doc.file_size_bytes = file_size_bytes
+            existing_doc.file_size_bytes = actual_file_size
+            existing_doc.content_type = str(uploaded_document["content_type"])
 
         attempt.status = "PROCESSING"
         attempt.completed_at = None

@@ -1,7 +1,7 @@
-"""Authentication routes: register, confirm, login, refresh, logout.
+"""Cognito registration and confirmation routes.
 
-Uses Amazon Cognito User Pools for identity. The customer row in RDS is
-created only after successful email confirmation.
+Amplify owns interactive sign-in and token sessions. The customer row in RDS
+is created only after successful email confirmation.
 """
 
 import logging
@@ -19,14 +19,9 @@ from app.models.customer import Customer
 from app.schemas.auth import (
     ConfirmRegistrationRequest,
     ConfirmRegistrationResponse,
-    LoginRequest,
-    LoginResponse,
     CustomerRegisterRequest,
     CustomerRegisterResponse,
     ErrorResponse,
-    LogoutResponse,
-    RefreshRequest,
-    RefreshResponse,
 )
 
 router = APIRouter()
@@ -44,10 +39,6 @@ def _cognito_error_message(exc: ClientError) -> str:
         return "Invalid confirmation code."
     if code == "ExpiredCodeException":
         return "Confirmation code has expired."
-    if code == "NotAuthorizedException":
-        return "Invalid email or password."
-    if code == "UserNotFoundException":
-        return "Invalid email or password."
     if code == "TooManyRequestsException":
         return "Too many requests. Please try again later."
     if code == "InvalidPasswordException":
@@ -191,86 +182,3 @@ def confirm_registration(
         message="Account confirmed successfully.",
         customer_id=str(customer.id),
     )
-
-
-@router.post(
-    "/login",
-    response_model=LoginResponse,
-    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
-)
-def login(request: LoginRequest):
-    """Authenticate a customer and return Cognito tokens."""
-    try:
-        response = cognito_idp.initiate_auth(
-            ClientId=settings.cognito_app_client_id,
-            AuthFlow="USER_PASSWORD_AUTH",
-            AuthParameters={
-                "USERNAME": request.email,
-                "PASSWORD": request.password,
-            },
-        )
-    except ClientError as exc:
-        logger.error("Cognito initiate_auth failed: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=_cognito_error_message(exc),
-        ) from exc
-
-    auth_result = response["AuthenticationResult"]
-    return LoginResponse(
-        access_token=auth_result["AccessToken"],
-        refresh_token=auth_result.get("RefreshToken", ""),
-        id_token=auth_result["IdToken"],
-        token_type="Bearer",
-        expires_in=auth_result.get("ExpiresIn", 3600),
-    )
-
-
-@router.post(
-    "/refresh",
-    response_model=RefreshResponse,
-    responses={401: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
-)
-def refresh_token(request: RefreshRequest):
-    """Refresh an access token using a refresh token."""
-    try:
-        response = cognito_idp.initiate_auth(
-            ClientId=settings.cognito_app_client_id,
-            AuthFlow="REFRESH_TOKEN_AUTH",
-            AuthParameters={
-                "REFRESH_TOKEN": request.refresh_token,
-            },
-        )
-    except ClientError as exc:
-        logger.error("Cognito refresh_token failed: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired refresh token.",
-        ) from exc
-
-    auth_result = response["AuthenticationResult"]
-    return RefreshResponse(
-        access_token=auth_result["AccessToken"],
-        id_token=auth_result.get("IdToken", ""),
-        token_type="Bearer",
-        expires_in=auth_result.get("ExpiresIn", 3600),
-    )
-
-
-@router.post(
-    "/logout",
-    response_model=LogoutResponse,
-    responses={401: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
-)
-def logout(access_token: str):
-    """Sign out the customer from all devices (invalidates tokens)."""
-    try:
-        cognito_idp.global_sign_out(AccessToken=access_token)
-    except ClientError as exc:
-        logger.error("Cognito global_sign_out failed: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Unable to sign out.",
-        ) from exc
-
-    return LogoutResponse(message="Signed out successfully.")

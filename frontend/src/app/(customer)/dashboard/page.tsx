@@ -52,7 +52,7 @@ export default function CustomerDashboard() {
   }
 
   const status = kycStatus?.status || 'PENDING';
-  const canUpload = status === 'PENDING' || status === 'REUPLOAD_PENDING' || status === 'REUPLOAD_REQUESTED';
+  const canUpload = status === 'PENDING' || status === 'REUPLOAD_PENDING';
 
   return (
     <div className="space-y-6">
@@ -151,7 +151,7 @@ export default function CustomerDashboard() {
               </div>
             )}
 
-            {(status === 'REUPLOAD_PENDING' || status === 'REUPLOAD_REQUESTED') && (
+            {status === 'REUPLOAD_PENDING' && (
               <div className="p-4 rounded-xl bg-orange-50 border border-orange-200 text-orange-900 text-sm flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
                 <div>

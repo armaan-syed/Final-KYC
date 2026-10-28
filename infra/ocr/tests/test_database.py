@@ -41,7 +41,10 @@ class FakeCursor:
                 KEY,
             )
         elif compact.startswith("UPDATE kyc_attempts"):
-            self.connection.status = parameters[0]
+            if "'REVIEW_REQUIRED'" in compact:
+                self.connection.status = "REVIEW_REQUIRED"
+            else:
+                self.connection.status = parameters[0]
         if self.connection.fail_on and self.connection.fail_on in compact:
             raise RuntimeError("database write failed")
 
@@ -171,6 +174,26 @@ class DatabaseRepositoryTests(unittest.TestCase):
             )
         self.assertTrue(connection.rolled_back)
         self.assertNotEqual(connection.status, "AUTO_VERIFIED")
+
+    def test_final_processing_failure_is_audited_and_moved_to_review(self):
+        connection = FakeConnection()
+        repository = self.repository(connection)
+        self.assertTrue(
+            repository.mark_processing_failure(
+                job=job(), error_type="ValueError", receive_count=3
+            )
+        )
+        self.assertTrue(connection.committed)
+        self.assertEqual(connection.status, "REVIEW_REQUIRED")
+        statements = [statement for statement, _ in connection.statements]
+        self.assertTrue(any("UPDATE kyc_cases" in statement for statement in statements))
+        audit = next(
+            parameters
+            for statement, parameters in connection.statements
+            if statement.startswith("INSERT INTO audit_events")
+        )
+        self.assertIn('"failure_code": "OCR_RETRY_LIMIT"', audit[2])
+        self.assertIn('"error_type": "ValueError"', audit[2])
 
     def test_database_secret_is_cached_and_validated(self):
         client = Mock()
