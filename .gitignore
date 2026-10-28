@@ -1,0 +1,4 @@
+# Local AWS credentials
+.env
+.env.*
+!.env.example

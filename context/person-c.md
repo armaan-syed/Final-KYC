@@ -140,7 +140,7 @@ NEXT_PUBLIC_COGNITO_APP_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
 NEXT_PUBLIC_AWS_REGION=ap-south-1
 ```
 
-Get these values from Person A (Cognito) and Person B (API URL).
+Get the public Cognito pool/client values from Person B and the API URL from Person B.
 
 ### 3.3 Route Protection
 Use Next.js middleware to protect routes:
@@ -708,7 +708,7 @@ const { data } = useQuery('kycStatus', getKYCStatus, {
 ## 11. Build Order for Person C
 
 1. Set up Next.js 14 project with TypeScript + Tailwind CSS
-2. Configure AWS Amplify auth (`lib/auth.ts`) with Person A's Cognito values
+2. Configure AWS Amplify auth (`lib/auth.ts`) with Person B's Cognito values
 3. Set up Axios API client (`lib/api.ts`) with Person B's API URL
 4. Define all TypeScript types (`lib/types.ts`)
 5. Build registration + login + confirm pages

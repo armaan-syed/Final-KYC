@@ -23,7 +23,7 @@ The context documents contain several interface disagreements. Each person can p
 | Database/SQS failure boundary | The API writes PostgreSQL state and sends an SQS message, but the context does not define their ordering or recovery if one succeeds and the other fails. | Define commit/send ordering and compensation using the assigned DB/SQS components; an accepted attempt must not remain falsely PROCESSING with no job, and a job must not reference missing data. Test DB failure, SQS failure, and retry/redelivery. |
 | KYC status vocabulary | Docs use `REVIEW_REQUIRED`, `REUPLOAD_PENDING`, and `REUPLOAD_REQUESTED` in different places. `REVIEW_REQUIRED` appears in API/attempt examples but is missing from the frontend `KYCStatus` union and the project-level case-status table. | Agree on persisted case statuses, attempt statuses, and API-visible statuses separately; map them explicitly. Update backend enums/schemas and frontend types/badges together. Test each allowed transition and reject unknown values. |
 | Authentication entry points | Person B defines `/auth/register`, `/auth/confirm`, `/auth/login`, `/auth/refresh`, `/auth/logout`; Person C's API client includes register/login, while its page notes also call Amplify `signIn()`/`signUp()` directly. | Select one consistent frontend-to-Cognito flow using the already-defined routes and Amplify responsibilities. Ensure registration confirmation, login, refresh, logout, and bearer-token attachment have one owner each. Verify customer and reviewer tokens against their respective pools and clients. |
-| Cognito frontend configuration | Person A/B specify separate customer and reviewer user pools; Person C shows a single pool ID/client ID in frontend environment variables. | Define the customer and reviewer public pool/client configuration needed by the two portals. Verify a customer cannot enter reviewer APIs and a reviewer cannot use customer-only APIs. Do not expose secrets in `NEXT_PUBLIC_*` variables. |
+| Cognito frontend configuration | Person B owns Cognito setup and provides separate customer/reviewer pool and client configuration; Person C shows a single pool ID/client ID in frontend environment variables. | Person B defines and provisions the customer and reviewer Cognito configuration; Person C consumes the public IDs for both portals. Person A wires the resulting pool/client IDs into API Gateway authorizers. Verify cross-pool access is denied and do not expose secrets in `NEXT_PUBLIC_*` variables. |
 | Reviewer sign-in entry | The reviewer portal requires authenticated reviewer access, but Person C's pages list one `/login` and do not specify how it selects the reviewer pool. | Agree whether the existing login page has a reviewer sign-in mode or the reviewer portal has its own login route. Keep reviewer self-registration disabled. Test customer and reviewer sign-in against the correct pool. |
 | API public routes and authorizers | Person A says only `/auth/register` and `/auth/login` are unauthenticated; Person B marks `/auth/confirm` and `/auth/refresh` unauthenticated too and uses separate Cognito pools. | Define the exact route table: registration, confirmation, login, and refresh are public as required by B's flow; logout and customer/reviewer APIs require auth. For an HTTP API JWT authorizer, configure the correct issuer/client audience per pool and attach the matching authorizer to protected routes, following [AWS HTTP API JWT authorizer configuration](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-jwt-authorizer.html). Verify both pools, the public route list, and unauthorized access. |
 | Frontend bucket policy | Person A's SAM resource list says frontend bucket public-read/static website; its detailed S3 section says private, CloudFront OAC, and no website endpoint. The project architecture also specifies CloudFront + S3. | Use the detailed security configuration: private bucket behind CloudFront OAC, with direct public S3 reads denied. Test both CloudFront access and direct bucket denial. |
@@ -41,7 +41,7 @@ When no person can settle a contract from the current context, record the exact 
 
 ### Existing assigned responsibility
 
-Own the AWS backbone and deployment: account/IAM setup, SAM infrastructure, private document and frontend storage, VPC/RDS security, SQS/DLQ, Cognito pools, API Gateway/CloudFront, OCR Lambda and Tesseract/OpenCV layer, Aadhaar/PAN parsing, verification, SNS/SES infrastructure, CloudWatch, and deployment. Person A also coordinates the OCR worker's database and notification integration with Person B.
+Own the AWS backbone and deployment: account/IAM setup, SAM infrastructure, private document and frontend storage, VPC/RDS security, SQS/DLQ, API Gateway/CloudFront, OCR Lambda and Tesseract/OpenCV layer, Aadhaar/PAN parsing, verification, SNS/SES infrastructure, CloudWatch, and deployment. Cognito user-pool and app-client setup is owned by Person B; Person A wires B's Cognito outputs into API Gateway authorizers and the SAM deployment. Person A also coordinates the OCR worker's database and notification integration with Person B.
 
 ### Implementation objective
 
@@ -53,7 +53,7 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 - Obtain the AWS account/region and secure deployment access. Enable root MFA and use a scoped administrative identity for daily work; never use root credentials in development.
 - Agree with Person B on migration/schema ownership, table/column names, transaction expectations, and the SQS message shape before the worker writes to RDS.
 - Resolve the upload-to-SQS, status, comparison-field, notification, and upload-format contracts above.
-- Obtain non-sensitive Cognito/S3/SQS/API values for wiring. Store secrets in Secrets Manager or encrypted Lambda configuration, not source control.
+- Obtain Person B's Cognito pool/client configuration plus the required S3/SQS/API values for infrastructure wiring. Store secrets in Secrets Manager or encrypted Lambda configuration, not source control.
 
 ### Step-by-step implementation plan
 
@@ -62,7 +62,7 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 - Inspect repository conventions, existing SAM files, AWS profiles, ignored files, and deployment scripts. Do not overwrite an existing stack.
 - If no implementation exists, establish an infrastructure folder with a SAM template, parameter/config examples, deployment instructions, and separate OCR worker source/tests. Keep resource names and outputs consistent with the `pramana-*` names in context.
 - Set up root MFA, use a separate day-to-day admin identity, and create the assigned IAM identities/access for Persons B and C with scoped permissions to this project's named resources. Never distribute root credentials or grant broad administrator permissions to team members.
-- Create a resource/output inventory that identifies which stack outputs Person B and C need.
+- Create a resource/output inventory for Person B and C, including the Cognito outputs supplied by Person B.
 
 **Files/modules:** SAM `template.yaml` (at the agreed repo location), SAM config/parameter examples, deployment README or the existing equivalent, OCR source and test modules.
 
@@ -86,11 +86,11 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 3. Provision the private, versioned, SSE-S3 document bucket with all public access blocked and the agreed CORS origin/methods for presigned PUT. Use bucket policies/IAM roles limited to this bucket. Enable the documented document-bucket access logging to a separate private log bucket.
 4. Provision the frontend S3 bucket as private and serve it through CloudFront with OAC, consistent with Person A's detailed bucket security section and the project architecture. Do not deploy a public S3 website endpoint.
 5. Provision the standard OCR queue and DLQ with 300-second visibility timeout, 4-day main-queue retention, 14-day DLQ retention, redrive after 3 failed receives, batch size 1, and maximum worker concurrency 5. Wire only the selected enqueue path from the contract checkpoint.
-6. Provision customer and reviewer Cognito user pools and app clients with the documented password rules, customer MFA setting, reviewer MFA recommendation, reviewer self-sign-up disabled, and token durations.
-7. Provision the Tesseract/OpenCV layer, OCR worker Lambda, FastAPI Lambda integration point, API Gateway HTTP API, route-level authorizers for the separate customer and reviewer pools, CloudFront, SNS/SES configuration, CloudWatch log groups/alarms/dashboard, and Secrets Manager values. Keep only the agreed auth endpoints public; configure throttling to the documented 50 requests/second steady and 100 requests/second burst limits.
+6. Consume the customer and reviewer Cognito user pools/app clients configured by Person B. Wire the matching pool issuers and client audiences into API Gateway route-level authorizers; keep only the agreed auth endpoints public.
+7. Provision the Tesseract/OpenCV layer, OCR worker Lambda, FastAPI Lambda integration point, API Gateway HTTP API, CloudFront, SNS/SES configuration, CloudWatch log groups/alarms/dashboard, and Secrets Manager values. Configure throttling to the documented 50 requests/second steady and 100 requests/second burst limits.
 8. Give each Lambda its own execution role with least-privilege access to only the resources it needs. Keep the OCR role limited to its bucket/queue/database/notification access and backend role limited to the backend's resources.
 
-**Files/modules:** SAM resource definitions, IAM policies, security-group rules, S3 bucket policies/CORS, CloudFront OAC config, queue/DLQ config, Cognito config, secrets/env parameter references, outputs.
+**Files/modules:** SAM resource definitions, IAM policies, security-group rules, S3 bucket policies/CORS, CloudFront OAC config, queue/DLQ config, API Gateway authorizer wiring for Person B's Cognito resources, secrets/env parameter references, outputs.
 
 **Test and acceptance:** run SAM/template lint or validation after each resource group; inspect the generated change set before deployment; verify public access is blocked on documents and frontend bucket while CloudFront OAC can read frontend assets; verify RDS is private and only Lambda security groups can reach it; verify private Lambda connectivity, per-pool API authorizers, public auth routes, API throttling, queue retry/DLQ settings and CORS with the configured frontend origin. Confirm the regional/account cost assumptions against the project's free-tier-first constraint before deploying. Use deployed smoke checks for security properties that local validation cannot prove.
 
@@ -121,8 +121,8 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 #### A6. Deploy and hand off
 
 - Deploy the stack in dependency order with `sam deploy`; run migrations only when Person B supplies the reviewed migration and has coordinated the database run.
-- Provide Person B the DB endpoint/name/port, Cognito pool/client IDs, document bucket, queue URL and message contract, SNS/SES config, layer ARN, region, secret name/permissions, API URL, and log locations through the agreed secure channel.
-- Provide Person C the API URL, CloudFront URL/distribution, frontend bucket, customer/reviewer public Cognito configuration, region, and CORS origin details.
+- Provide Person B the DB endpoint/name/port, document bucket, queue URL and message contract, SNS/SES config, layer ARN, region, secret name/permissions, API URL, and log locations through the agreed secure channel.
+- Provide Person C the API URL, CloudFront URL/distribution, frontend bucket, region, and CORS origin details. Person B provides Person C the customer/reviewer public Cognito configuration.
 - Record deployed resource identifiers and verification evidence in a handoff note without publishing secrets.
 
 ### Integration requirements and checkpoints

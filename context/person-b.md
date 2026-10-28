@@ -1,7 +1,7 @@
 # Pramāṇa — Person B Workload
-## FastAPI Backend · PostgreSQL Schema · Verification Engine Integration · Cognito Auth
+## FastAPI Backend · PostgreSQL Schema · Verification Engine Integration · Cognito Setup and Auth
 
-> Person B owns the brain of the system — the API layer and the data layer. You define the database schema, write all FastAPI endpoints, integrate Cognito authentication, and provide the API contract that Person C (frontend) consumes. You do not provision AWS infrastructure (Person A does that), but you deploy your Lambda function through the SAM template Person A manages.
+> Person B owns the API and data layer and now also owns Cognito setup: customer/reviewer user pools, app clients, authentication settings, and backend integration. You define the database schema, write all FastAPI endpoints, and provide the API contract and public Cognito configuration that Person C consumes. Person A manages the shared SAM infrastructure and wires your Cognito resources into API Gateway authorizers; coordinate resource ownership and deployment with A.
 
 ---
 
@@ -13,6 +13,7 @@
 | Database schema | Full PostgreSQL schema — all tables, indexes, constraints |
 | SQLAlchemy models | ORM models matching the schema |
 | Cognito integration | JWT validation middleware, user identity extraction |
+| Cognito resources | Customer/reviewer user pools, app clients, and authentication settings; coordinate API Gateway authorizer wiring with Person A |
 | Customer endpoints | Registration, login flow, profile, KYC status |
 | Document upload | Presigned URL generation, upload initiation |
 | KYC case management | Case creation, attempt tracking, status updates |

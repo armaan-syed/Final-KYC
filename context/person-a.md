@@ -1,7 +1,7 @@
 # Pramāṇa — Person A Workload
 ## AWS Infrastructure · OCR Pipeline · Security · Deployment
 
-> Person A owns the cloud backbone. This includes all AWS infrastructure provisioning, IAM security, the Tesseract/OpenCV OCR pipeline, SNS/SES notifications, CloudWatch monitoring, and final deployment. Person A's work enables Person B (backend) and Person C (frontend) to function.
+> Person A owns the cloud backbone. This includes AWS infrastructure provisioning, IAM security, the Tesseract/OpenCV OCR pipeline, SNS/SES notifications, CloudWatch monitoring, and final deployment. Cognito user-pool and app-client setup is assigned to Person B; Person A wires those resources into API Gateway authorizers and the shared SAM infrastructure. Person A's work enables Person B (backend) and Person C (frontend) to function.
 
 ---
 
@@ -18,8 +18,7 @@
 | Verification Engine | Field comparison logic, match scoring, result writing to RDS |
 | SNS | SMS notification topics and subscriptions |
 | SES | Email notification setup, templates |
-| Cognito | User pool creation (customer pool + reviewer pool) |
-| API Gateway | HTTP API, routes, Cognito authorizer |
+| API Gateway | HTTP API, routes, Cognito authorizer wiring using resources configured by Person B |
 | CloudWatch | Log groups, metric filters, alarms |
 | RDS Security | VPC, security groups, RDS not publicly exposed |
 | Deployment | CDK/SAM deploy scripts, environment configs |
@@ -42,7 +41,7 @@ Needs access to:
 - RDS (read/write to the Pramāṇa database)
 - Lambda (deploy and invoke backend functions)
 - API Gateway (deploy and manage APIs)
-- Cognito (read user pool configs)
+- Cognito (manage the project's pools and app clients)
 - S3 (read documents bucket — for local testing only)
 - SQS (send/receive messages — for local testing)
 - CloudWatch (read logs)
@@ -52,7 +51,7 @@ Needs access to:
 Needs access to:
 - S3 (deploy frontend to hosting bucket)
 - CloudFront (create invalidations after frontend deploys)
-- Cognito (read user pool and app client IDs — public config only)
+- Cognito IDs are public configuration supplied by Person B; no Cognito management access is needed
 - CloudWatch (read logs for frontend debugging)
 
 ### 1.3 IAM Policy Principle
@@ -84,9 +83,7 @@ Use **AWS SAM (Serverless Application Model)** for this project.
 - Lambda function — OCR worker (your code)
 - Lambda Layer — Tesseract + OpenCV
 - API Gateway HTTP API — connected to backend Lambda
-- Cognito User Pool — customer pool
-- Cognito User Pool — reviewer pool
-- Cognito App Clients — for frontend to authenticate
+- API Gateway JWT authorizers — configured from Person B's customer/reviewer Cognito pools and app clients
 - RDS instance — PostgreSQL t3.micro (in VPC)
 - VPC — private subnet for RDS, Lambda in VPC
 - Security Groups — Lambda → RDS only, no public RDS access
