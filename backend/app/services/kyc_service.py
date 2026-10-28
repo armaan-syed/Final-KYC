@@ -5,6 +5,7 @@ reviewer decisions, and audit event writing.
 """
 
 from datetime import datetime, timezone
+import logging
 from typing import Optional
 from uuid import UUID
 
@@ -25,6 +26,8 @@ from app.services.notification import (
 )
 from app.services.s3 import derive_s3_key, generate_presigned_upload_url
 from app.services.sqs import enqueue_ocr_job
+
+logger = logging.getLogger(__name__)
 
 
 class KYCService:
@@ -257,33 +260,80 @@ class KYCService:
 
         self.db.flush()
 
-        # Notifications to customer
+        # Persist the decision before calling external providers. A provider
+        # failure must not roll back a completed reviewer action.
+        self.db.commit()
+
+        # Notifications to customer. The audit records the provider request's
+        # accepted/failed result (not a claim of final delivery).
         customer = self.db.query(Customer).filter_by(id=case.customer_id).first()
         if customer:
             if decision == "REJECTED":
-                send_sms(customer.phone_number, rejection_sms_message())
+                sms_accepted = send_sms(customer.phone_number, rejection_sms_message())
+                self._record_notification_attempt(
+                    case, attempt, "SNS_SMS", sms_accepted
+                )
                 subject, body_text, body_html = reviewer_decision_email(
                     customer.email, customer.full_name, str(case.id), "rejected"
                 )
-                send_email(customer.email, subject, body_html, body_text)
+                email_accepted = send_email(customer.email, subject, body_html, body_text)
+                self._record_notification_attempt(
+                    case, attempt, "SES_EMAIL", email_accepted
+                )
             elif decision == "APPROVED":
                 subject, body_text, body_html = reviewer_decision_email(
                     customer.email, customer.full_name, str(case.id), "approved"
                 )
-                send_email(customer.email, subject, body_html, body_text)
+                email_accepted = send_email(customer.email, subject, body_html, body_text)
+                self._record_notification_attempt(
+                    case, attempt, "SES_EMAIL", email_accepted
+                )
             elif decision == "REUPLOAD_REQUESTED":
                 subject, body_text, body_html = reviewer_decision_email(
                     customer.email, customer.full_name, str(case.id), "re-upload requested"
                 )
-                send_email(customer.email, subject, body_html, body_text)
-
-        self.db.commit()
+                email_accepted = send_email(customer.email, subject, body_html, body_text)
+                self._record_notification_attempt(
+                    case, attempt, "SES_EMAIL", email_accepted
+                )
 
         return {
             "message": "Decision recorded.",
             "decision": decision,
             "decided_at": attempt.completed_at,
         }
+
+    def _record_notification_attempt(
+        self,
+        case: KYCCase,
+        attempt: KYCAttempt,
+        channel: str,
+        accepted: bool,
+    ) -> None:
+        """Append a safe audit record for an attempted provider send.
+
+        Provider acceptance is not proof of delivery. If recording the audit
+        event fails, preserve the already-committed decision and log no PII.
+        """
+        try:
+            self._write_audit_event(
+                kyc_case_id=case.id,
+                attempt_id=attempt.id,
+                actor="SYSTEM",
+                action="NOTIFICATION_ATTEMPTED",
+                details={
+                    "channel": channel,
+                    "provider_accepted": accepted,
+                },
+            )
+            self.db.commit()
+        except Exception as exc:  # notification audit must not undo the decision
+            self.db.rollback()
+            logger.warning(
+                "Could not persist notification audit (channel=%s, error_type=%s)",
+                channel,
+                type(exc).__name__,
+            )
 
     # ------------------------------------------------------------------
     # Audit

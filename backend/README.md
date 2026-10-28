@@ -45,7 +45,9 @@ backend/
   requirements.txt        ← Python dependencies
   .env.example            ← Environment variable template (copy to .env)
   .env                    ← Local development values (git-ignored, DO NOT COMMIT)
-  template.yaml           ← AWS SAM template (coordinate with Person A)
+  template.yaml           ← Backend/API SAM component (integrate with Person A)
+  infrastructure/
+    database.yaml         ← Private RDS component; requires Person A network outputs/review
   alembic.ini             ← Alembic configuration
 ```
 
@@ -123,7 +125,7 @@ reviewers (separate Cognito pool)
 ```bash
 cd backend
 
-# 1. Copy env template and fill in values from Person A
+# 1. Copy env template and fill in local/test values (never use these defaults in AWS)
 cp .env.example .env
 
 # 2. Install dependencies
@@ -139,10 +141,36 @@ uvicorn app.main:app --reload --port 8000
 sam local start-api
 ```
 
+## Database and deployment integration
+
+The database component template is `infrastructure/database.yaml`. It creates a
+private encrypted PostgreSQL instance, RDS-managed master credentials in Secrets
+Manager, and a DB subnet group. It intentionally consumes rather than creates
+the shared VPC and database security group. Before deploying, obtain and review:
+
+- At least two private subnet IDs in different Availability Zones.
+- A database security group allowing TCP 5432 only from approved application
+  security groups (backend and OCR worker as needed).
+- Person A's approved stack/deployment path and a reviewed change set.
+- An explicitly accepted DB instance class and cost estimate.
+
+Deploy the database component first, then apply `alembic upgrade head` from a
+controlled migration runner, then deploy the API/worker components. Do not run
+migrations in Lambda startup. Pass only the database endpoint/name and secret
+ARN to the backend component; the Lambda retrieves credentials from Secrets
+Manager using its scoped IAM permission. The database password is never an
+ordinary CloudFormation parameter or source-controlled setting.
+
+`template.yaml` requires the database secret ARN, private subnet IDs, backend
+Lambda security group, SQS queue ARN/URL, SES identity ARN, and the shared
+resource outputs. It is a component template, not approval to deploy a second
+shared API/VPC stack. Confirm the root-template/API Gateway authorizer design
+with Person A before integration.
+
 ## Coordination with Person A
 
 Before deploying, obtain these values from Person A:
-- RDS host, port, db name, username, password
+- RDS host, port, DB name, and Secrets Manager ARN (never the password in chat)
 - Cognito customer & reviewer pool IDs and app client IDs
 - S3 documents bucket name
 - SQS queue URL

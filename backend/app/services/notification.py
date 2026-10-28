@@ -7,11 +7,13 @@ All templates preserve the contract: generic rejection SMS (no sensitive
 detail), portal-only rejection detail, and no sensitive values in SMS.
 """
 
+import html
+import logging
+
 import boto3
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.config import settings
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +34,12 @@ def send_sms(phone_number: str, message: str) -> bool:
             Message=message,
         )
         return True
-    except ClientError as exc:
-        logger.error("SNS SMS send failed: %s", exc, exc_info=True)
+    except (BotoCoreError, ClientError) as exc:
+        # Do not log provider request/response objects: they may contain a
+        # destination phone number or message metadata.
+        error_response = getattr(exc, "response", {})
+        code = error_response.get("Error", {}).get("Code", type(exc).__name__)
+        logger.warning("SNS SMS send failed (code=%s)", code)
         return False
 
 
@@ -60,8 +66,10 @@ def send_email(
             },
         )
         return True
-    except ClientError as exc:
-        logger.error("SES email send failed: %s", exc, exc_info=True)
+    except (BotoCoreError, ClientError) as exc:
+        error_response = getattr(exc, "response", {})
+        code = error_response.get("Error", {}).get("Code", type(exc).__name__)
+        logger.warning("SES email send failed (code=%s)", code)
         return False
 
 
@@ -93,9 +101,11 @@ def auto_verified_email(
         "All document fields matched your registered information.\n\n"
         "Thank you,\nPramana Team"
     )
+    safe_name = html.escape(customer_name)
+    safe_case_id = html.escape(kyc_case_id)
     body_html = (
-        f"<p>Hello {customer_name},</p>"
-        f"<p>Your KYC verification (case <strong>{kyc_case_id}</strong>) has been "
+        f"<p>Hello {safe_name},</p>"
+        f"<p>Your KYC verification (case <strong>{safe_case_id}</strong>) has been "
         "automatically verified. All document fields matched your registered information.</p>"
         "<p>Thank you,<br/>Pramana Team</p>"
     )
@@ -117,10 +127,13 @@ def reviewer_decision_email(
         "Please log in to the Pramana portal for more information.\n\n"
         "Thank you,\nPramana Team"
     )
+    safe_name = html.escape(customer_name)
+    safe_case_id = html.escape(kyc_case_id)
+    safe_decision = html.escape(decision.lower())
     body_html = (
-        f"<p>Hello {customer_name},</p>"
-        f"<p>Your KYC verification (case <strong>{kyc_case_id}</strong>) has been "
-        f"<strong>{decision.lower()}</strong> by a reviewer.</p>"
+        f"<p>Hello {safe_name},</p>"
+        f"<p>Your KYC verification (case <strong>{safe_case_id}</strong>) has been "
+        f"<strong>{safe_decision}</strong> by a reviewer.</p>"
         "<p>Please log in to the Pramana portal for more information.</p>"
         "<p>Thank you,<br/>Pramana Team</p>"
     )

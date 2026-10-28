@@ -27,7 +27,8 @@ class AuditEvent(Base):
     # 'SYSTEM' or reviewer cognito_sub
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     # SUBMITTED, PROCESSING_STARTED, AUTO_VERIFIED, REVIEW_REQUIRED,
-    # REVIEWER_APPROVED, REVIEWER_REJECTED, REUPLOAD_REQUESTED, NOTIFICATION_SENT
+    # REVIEWER_APPROVED, REVIEWER_REJECTED, REUPLOAD_REQUESTED,
+    # NOTIFICATION_ATTEMPTED
     details: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True

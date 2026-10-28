@@ -22,11 +22,9 @@ target_metadata = Base.metadata
 
 
 def get_url():
-    from app.config import settings
-    return (
-        f"postgresql+psycopg2://{settings.rds_username}:{settings.rds_password}"
-        f"@{settings.rds_host}:{settings.rds_port}/{settings.rds_db_name}"
-    )
+    from app.database import get_database_url
+
+    return get_database_url().render_as_string(hide_password=False)
 
 
 def run_migrations_offline() -> None:

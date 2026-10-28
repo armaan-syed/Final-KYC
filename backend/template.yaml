@@ -1,11 +1,22 @@
-# Pramāṇa Backend — Person B (FastAPI + PostgreSQL + Cognito)
-
-# Deployed via Person A's SAM template. This file describes the backend
-# Lambda configuration for coordination only.
-
 AWSTemplateFormatVersion: "2010-09-09"
-Transform: AWS::Serverless-2016-10-31
 Description: Pramāṇa KYC Backend API (Person B)
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@v3
+  "com.aws.cloudformation.Context":
+    arch: FastAPI Lambda/API component consumes Person A network/storage/queue outputs and B database/Cognito/notification outputs
+    must:
+      - integrate once into the reviewed root stack; do not create a parallel shared API or network
+      - Lambda uses private subnets; RDS secret is read only by its scoped execution role
+      - API and worker status/queue/auth contracts must be agreed before integration
+    ref:
+      - at: README.md
+        has: deployment order, required outputs, and migration runbook
+        scope: integration
+      - at: IMPLEMENTATION_HANDOFF.md
+        has: unresolved authorizer/SMS contract and verification blockers
+        scope: coordination
 
 Parameters:
   Environment:
@@ -38,6 +49,10 @@ Parameters:
     Type: String
     Description: SQS queue URL for OCR worker
 
+  SQSQueueArn:
+    Type: String
+    Description: SQS queue ARN for least-privilege SendMessage permission
+
   SNSTopicArn:
     Type: String
     Description: SNS topic ARN for notifications
@@ -59,14 +74,23 @@ Parameters:
     Type: String
     Description: RDS database name
 
-  RDSUsername:
+  DatabaseSecretArn:
     Type: String
-    Description: RDS database username
+    Description: Secrets Manager secret ARN for RDS username/password JSON
 
-  RDSPassword:
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Person A's private subnets for the backend Lambda
+
+  BackendLambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Lambda security group allowed to connect to the database
+
+  SESIdentityArn:
     Type: String
-    NoEcho: true
-    Description: RDS database password
+    Description: SES verified sender identity ARN
+
+Transform: AWS::Serverless-2016-10-31
 
 Resources:
   BackendLambdaFunction:
@@ -74,7 +98,7 @@ Resources:
     Properties:
       FunctionName: !Sub pramana-kyc-backend-${Environment}
       Description: Pramāṇa KYC FastAPI backend (Person B)
-      CodeUri: ./backend/
+      CodeUri: .
       Handler: app.main.handler
       Runtime: python3.11
       Timeout: 30
@@ -85,8 +109,7 @@ Resources:
           RDS_HOST: !Ref RDSHost
           RDS_PORT: !Ref RDSPort
           RDS_DB_NAME: !Ref RDSDbName
-          RDS_USERNAME: !Ref RDSUsername
-          RDS_PASSWORD: !Ref RDSPassword
+          RDS_SECRET_ARN: !Ref DatabaseSecretArn
           COGNITO_CUSTOMER_POOL_ID: !Ref CustomerUserPoolId
           COGNITO_REVIEWER_POOL_ID: !Ref ReviewerUserPoolId
           COGNITO_APP_CLIENT_ID: !Ref CustomerAppClientId
@@ -96,13 +119,19 @@ Resources:
           SNS_TOPIC_ARN: !Ref SNSTopicArn
           SES_SENDER_EMAIL: !Ref SESSenderEmail
           API_BASE_URL: !Sub https://${ApiGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref BackendLambdaSecurityGroupId
+        SubnetIds: !Ref PrivateSubnetIds
       Policies:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
         - Version: "2012-10-17"
           Statement:
             - Effect: Allow
               Action:
                 - sqs:SendMessage
-              Resource: !Ref SQSQueueUrl
+              Resource: !Ref SQSQueueArn
             - Effect: Allow
               Action:
                 - sns:Publish
@@ -111,15 +140,17 @@ Resources:
               Action:
                 - ses:SendEmail
                 - ses:SendRawEmail
-              Resource: "*"
+              Resource: !Ref SESIdentityArn
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref DatabaseSecretArn
             - Effect: Allow
               Action:
                 - s3:PutObject
                 - s3:GetObject
-                - s3:DeleteObject
               Resource:
                 - !Sub arn:aws:s3:::${DocumentsBucket}/*
-                - !Sub arn:aws:s3:::${DocumentsBucket}
       Events:
         ApiEvent:
           Type: Api
@@ -127,11 +158,17 @@ Resources:
             RestApiId: !Ref ApiGatewayApi
             Path: /{proxy+}
             Method: ANY
+        RootApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayApi
+            Path: /
+            Method: ANY
 
   ApiGatewayApi:
     Type: AWS::Serverless::Api
     Properties:
-      Name: pramana-kyc-api-${Environment}
+      Name: !Sub pramana-kyc-api-${Environment}
       StageName: !Ref Environment
       DefinitionBody:
         openapi: "3.0.1"
