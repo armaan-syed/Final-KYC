@@ -7,6 +7,7 @@ at startup; missing required values raise a clear, non-secret error.
 from functools import lru_cache
 from typing import List
 
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -19,7 +20,10 @@ class Settings(BaseSettings):
     rds_port: int = 5432
     rds_db_name: str = "pramana_kyc"
     rds_username: str = "postgres"
-    rds_password: str = "changeme"
+    # Local deployments may supply a password directly. Deployed Lambdas should
+    # use Secrets Manager and set RDS_SECRET_ARN instead.
+    rds_password: SecretStr | None = None
+    rds_secret_arn: str | None = None
 
     # Cognito - Customer Pool
     cognito_customer_pool_id: str
@@ -33,11 +37,8 @@ class Settings(BaseSettings):
     # SQS Queue for OCR Worker
     sqs_queue_url: str
 
-    # SNS Topic for SMS notifications
-    sns_topic_arn: str | None = None
-
     # SES Sender Email
-    ses_sender_email: str = "noreply@pramana.example.com"
+    ses_sender_email: str
 
     # API
     api_base_url: str = "http://localhost:8000"
@@ -61,6 +62,13 @@ class Settings(BaseSettings):
         "case_sensitive": False,
         "extra": "ignore",
     }
+
+    @model_validator(mode="after")
+    def require_database_auth(self) -> "Settings":
+        """Require either local password auth or a Secrets Manager secret ARN."""
+        if not self.rds_secret_arn and not self.rds_password:
+            raise ValueError("Set RDS_SECRET_ARN or RDS_PASSWORD for database access")
+        return self
 
 
 @lru_cache()

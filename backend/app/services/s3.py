@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError
 
 from app.config import settings
 from fastapi import HTTPException, status
+from pramana_limits import MAX_DOCUMENT_BYTES, ALLOWED_DOCUMENT_CONTENT_TYPES
 
 s3_client = boto3.client("s3", region_name=settings.aws_region)
 
@@ -81,6 +82,39 @@ def generate_presigned_get_url(
             detail="Unable to generate document preview URL",
         ) from exc
     return url
+
+
+def inspect_uploaded_document(s3_key: str, s3_bucket: str | None = None) -> dict[str, object]:
+    """Read authoritative size/type metadata for an uploaded KYC object."""
+    bucket = s3_bucket or settings.s3_documents_bucket
+    try:
+        metadata = s3_client.head_object(Bucket=bucket, Key=s3_key)
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        is_missing = code in {"404", "NoSuchKey", "NotFound"}
+        raise HTTPException(
+            status_code=(status.HTTP_400_BAD_REQUEST if is_missing else status.HTTP_503_SERVICE_UNAVAILABLE),
+            detail=("Uploaded document was not found." if is_missing else "Unable to inspect uploaded document."),
+        ) from exc
+
+    content_length = int(metadata.get("ContentLength", -1))
+    content_type = str(metadata.get("ContentType", "")).split(";", 1)[0].strip().lower()
+    if content_length < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded document size is invalid.",
+        )
+    if content_length > MAX_DOCUMENT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Document must be no larger than 10 MiB.",
+        )
+    if content_type not in ALLOWED_DOCUMENT_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Document must be JPEG, PNG, or PDF.",
+        )
+    return {"content_length": content_length, "content_type": content_type}
 
 
 def derive_s3_key(customer_id: str, attempt_id: str, file_name: str) -> str:

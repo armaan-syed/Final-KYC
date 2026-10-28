@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@hookform/resolvers": "^3.10.0",
     "aws-amplify": "^6.16.2",
     "axios": "^1.7.9",
     "clsx": "^2.1.1",

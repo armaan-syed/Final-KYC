@@ -5,6 +5,7 @@ reviewer decisions, and audit event writing.
 """
 
 from datetime import datetime, timezone
+import logging
 from typing import Optional
 from uuid import UUID
 
@@ -23,8 +24,14 @@ from app.services.notification import (
     send_email,
     send_sms,
 )
-from app.services.s3 import derive_s3_key, generate_presigned_upload_url
+from app.services.s3 import (
+    derive_s3_key,
+    generate_presigned_upload_url,
+    inspect_uploaded_document,
+)
 from app.services.sqs import enqueue_ocr_job
+
+logger = logging.getLogger(__name__)
 
 
 class KYCService:
@@ -117,8 +124,10 @@ class KYCService:
         """Mark an attempt as submitted, create the document row, and enqueue SQS.
 
         The attempt must belong to the customer's case and be in PROCESSING or
-        REUPLOAD_REQUESTED state. After DB commit, exactly one SQS message is
-        enqueued for the OCR worker.
+        REUPLOAD_REQUESTED state. The database rows are committed before the
+        queue send so the worker cannot observe an uncommitted attempt. A
+        retried submit may enqueue a duplicate standard-queue message; the
+        worker serializes result persistence and ignores completed attempts.
         """
         attempt = (
             self.db.query(KYCAttempt)
@@ -133,9 +142,12 @@ class KYCService:
         if attempt.document_type != document_type:
             raise ValueError("Document type does not match the attempt")
 
+        s3_key = derive_s3_key(str(customer.id), str(attempt.id), file_name)
+        uploaded_document = inspect_uploaded_document(s3_key)
+
         # Create/update document row
         existing_doc = self.db.query(KYCDocument).filter_by(attempt_id=attempt.id).first()
-        s3_key = derive_s3_key(str(customer.id), str(attempt.id), file_name)
+        actual_file_size = int(uploaded_document["content_length"])
 
         if existing_doc is None:
             document = KYCDocument(
@@ -143,13 +155,15 @@ class KYCService:
                 s3_bucket=settings.s3_documents_bucket,
                 s3_key=s3_key,
                 file_name=file_name,
-                file_size_bytes=file_size_bytes,
+                file_size_bytes=actual_file_size,
+                content_type=str(uploaded_document["content_type"]),
             )
             self.db.add(document)
         else:
             existing_doc.s3_key = s3_key
             existing_doc.file_name = file_name
-            existing_doc.file_size_bytes = file_size_bytes
+            existing_doc.file_size_bytes = actual_file_size
+            existing_doc.content_type = str(uploaded_document["content_type"])
 
         attempt.status = "PROCESSING"
         attempt.completed_at = None
@@ -157,16 +171,6 @@ class KYCService:
         case.updated_at = datetime.now(timezone.utc)
 
         self.db.flush()
-
-        # Enqueue SQS message for the OCR worker
-        enqueue_ocr_job(
-            kyc_attempt_id=attempt.id,
-            kyc_case_id=case.id,
-            customer_id=customer.id,
-            s3_bucket=settings.s3_documents_bucket,
-            s3_key=s3_key,
-            document_type=document_type,
-        )
 
         self._write_audit_event(
             kyc_case_id=case.id,
@@ -181,6 +185,18 @@ class KYCService:
         )
 
         self.db.commit()
+
+        # Commit first so an SQS consumer always sees the complete DB record.
+        # If this call fails, the API returns an error and the client may retry;
+        # the worker's attempt-level lock makes duplicate messages safe.
+        enqueue_ocr_job(
+            kyc_attempt_id=attempt.id,
+            kyc_case_id=case.id,
+            customer_id=customer.id,
+            s3_bucket=settings.s3_documents_bucket,
+            s3_key=s3_key,
+            document_type=document_type,
+        )
 
         return SubmitKYCResponse(
             attempt_id=attempt.id,
@@ -232,14 +248,9 @@ class KYCService:
             existing_decision.notes = notes
 
         # Update attempt and case status
-        status_map = {
-            "APPROVED": "APPROVED",
-            "REJECTED": "REJECTED",
-            "REUPLOAD_REQUESTED": "REUPLOAD_REQUESTED",
-        }
-        attempt.status = status_map[decision]
+        attempt.status = decision
         attempt.completed_at = datetime.now(timezone.utc)
-        case.status = status_map[decision]
+        case.status = "REUPLOAD_PENDING" if decision == "REUPLOAD_REQUESTED" else decision
         case.updated_at = datetime.now(timezone.utc)
 
         # Write audit event
@@ -257,33 +268,80 @@ class KYCService:
 
         self.db.flush()
 
-        # Notifications to customer
+        # Persist the decision before calling external providers. A provider
+        # failure must not roll back a completed reviewer action.
+        self.db.commit()
+
+        # Notifications to customer. The audit records the provider request's
+        # accepted/failed result (not a claim of final delivery).
         customer = self.db.query(Customer).filter_by(id=case.customer_id).first()
         if customer:
             if decision == "REJECTED":
-                send_sms(customer.phone_number, rejection_sms_message())
+                sms_accepted = send_sms(customer.phone_number, rejection_sms_message())
+                self._record_notification_attempt(
+                    case, attempt, "SNS_SMS", sms_accepted
+                )
                 subject, body_text, body_html = reviewer_decision_email(
                     customer.email, customer.full_name, str(case.id), "rejected"
                 )
-                send_email(customer.email, subject, body_html, body_text)
+                email_accepted = send_email(customer.email, subject, body_html, body_text)
+                self._record_notification_attempt(
+                    case, attempt, "SES_EMAIL", email_accepted
+                )
             elif decision == "APPROVED":
                 subject, body_text, body_html = reviewer_decision_email(
                     customer.email, customer.full_name, str(case.id), "approved"
                 )
-                send_email(customer.email, subject, body_html, body_text)
+                email_accepted = send_email(customer.email, subject, body_html, body_text)
+                self._record_notification_attempt(
+                    case, attempt, "SES_EMAIL", email_accepted
+                )
             elif decision == "REUPLOAD_REQUESTED":
                 subject, body_text, body_html = reviewer_decision_email(
                     customer.email, customer.full_name, str(case.id), "re-upload requested"
                 )
-                send_email(customer.email, subject, body_html, body_text)
-
-        self.db.commit()
+                email_accepted = send_email(customer.email, subject, body_html, body_text)
+                self._record_notification_attempt(
+                    case, attempt, "SES_EMAIL", email_accepted
+                )
 
         return {
             "message": "Decision recorded.",
             "decision": decision,
             "decided_at": attempt.completed_at,
         }
+
+    def _record_notification_attempt(
+        self,
+        case: KYCCase,
+        attempt: KYCAttempt,
+        channel: str,
+        accepted: bool,
+    ) -> None:
+        """Append a safe audit record for an attempted provider send.
+
+        Provider acceptance is not proof of delivery. If recording the audit
+        event fails, preserve the already-committed decision and log no PII.
+        """
+        try:
+            self._write_audit_event(
+                kyc_case_id=case.id,
+                attempt_id=attempt.id,
+                actor="SYSTEM",
+                action="NOTIFICATION_ATTEMPTED",
+                details={
+                    "channel": channel,
+                    "provider_accepted": accepted,
+                },
+            )
+            self.db.commit()
+        except Exception as exc:  # notification audit must not undo the decision
+            self.db.rollback()
+            logger.warning(
+                "Could not persist notification audit (channel=%s, error_type=%s)",
+                channel,
+                type(exc).__name__,
+            )
 
     # ------------------------------------------------------------------
     # Audit

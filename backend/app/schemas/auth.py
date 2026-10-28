@@ -1,6 +1,9 @@
 """Auth request/response schemas."""
 
+from datetime import date
+
 from pydantic import BaseModel, EmailStr, Field
+from pydantic import field_validator
 
 
 class CustomerRegisterRequest(BaseModel):
@@ -16,6 +19,17 @@ class CustomerRegisterRequest(BaseModel):
     state: str = Field(..., min_length=1, max_length=100)
     pincode: str = Field(..., min_length=1, max_length=10)
 
+    @field_validator("date_of_birth")
+    @classmethod
+    def validate_date_of_birth(cls, value: str) -> str:
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("date_of_birth must be a valid YYYY-MM-DD date") from exc
+        if parsed.isoformat() != value:
+            raise ValueError("date_of_birth must use YYYY-MM-DD format")
+        return value
+
 
 class CustomerRegisterResponse(BaseModel):
     message: str
@@ -30,34 +44,6 @@ class ConfirmRegistrationRequest(BaseModel):
 class ConfirmRegistrationResponse(BaseModel):
     message: str
     customer_id: str
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class LoginResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    id_token: str
-    token_type: str = "Bearer"
-    expires_in: int
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
-
-class RefreshResponse(BaseModel):
-    access_token: str
-    id_token: str
-    token_type: str = "Bearer"
-    expires_in: int
-
-
-class LogoutResponse(BaseModel):
-    message: str
 
 
 class ErrorResponse(BaseModel):

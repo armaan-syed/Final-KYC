@@ -1,11 +1,22 @@
-# Pramāṇa Backend — Person B (FastAPI + PostgreSQL + Cognito)
-
-# Deployed via Person A's SAM template. This file describes the backend
-# Lambda configuration for coordination only.
-
 AWSTemplateFormatVersion: "2010-09-09"
-Transform: AWS::Serverless-2016-10-31
 Description: Pramāṇa KYC Backend API (Person B)
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@v3
+  "com.aws.cloudformation.Context":
+    arch: FastAPI Lambda/API component consumes Person A network/storage/queue outputs and B database/Cognito/notification outputs
+    must:
+      - integrate once into the reviewed root stack; do not create a parallel shared API or network
+      - Lambda uses private subnets; RDS secret is read only by its scoped execution role
+      - API Gateway auth boundary and SES sender identity must be agreed before deployment
+    ref:
+      - at: README.md
+        has: deployment order, required outputs, and migration runbook
+        scope: integration
+      - at: IMPLEMENTATION_HANDOFF.md
+        has: deployed resources, remaining connectivity/SES blockers, and verification state
+        scope: coordination
 
 Parameters:
   Environment:
@@ -30,6 +41,14 @@ Parameters:
     Type: String
     Description: Cognito Reviewer App Client ID
 
+  CustomerUserPoolArn:
+    Type: String
+    Description: Customer user-pool ARN used to scope AdminGetUser after confirmation
+
+  SharedNotificationsLayerArn:
+    Type: String
+    Description: Shared notifications and RDS CA Lambda layer ARN from Person A's foundation stack
+
   DocumentsBucket:
     Type: String
     Description: S3 bucket for KYC documents
@@ -38,9 +57,9 @@ Parameters:
     Type: String
     Description: SQS queue URL for OCR worker
 
-  SNSTopicArn:
+  SQSQueueArn:
     Type: String
-    Description: SNS topic ARN for notifications
+    Description: SQS queue ARN for least-privilege SendMessage permission
 
   SESSenderEmail:
     Type: String
@@ -59,14 +78,23 @@ Parameters:
     Type: String
     Description: RDS database name
 
-  RDSUsername:
+  DatabaseSecretArn:
     Type: String
-    Description: RDS database username
+    Description: Secrets Manager secret ARN for RDS username/password JSON
 
-  RDSPassword:
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Person A's private subnets for the backend Lambda
+
+  BackendLambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Lambda security group allowed to connect to the database
+
+  SESIdentityArn:
     Type: String
-    NoEcho: true
-    Description: RDS database password
+    Description: SES verified sender identity ARN
+
+Transform: AWS::Serverless-2016-10-31
 
 Resources:
   BackendLambdaFunction:
@@ -74,52 +102,67 @@ Resources:
     Properties:
       FunctionName: !Sub pramana-kyc-backend-${Environment}
       Description: Pramāṇa KYC FastAPI backend (Person B)
-      CodeUri: ./backend/
+      CodeUri: .
       Handler: app.main.handler
       Runtime: python3.11
       Timeout: 30
       MemorySize: 512
       Environment:
         Variables:
-          AWS_REGION: !Ref AWS::Region
           RDS_HOST: !Ref RDSHost
           RDS_PORT: !Ref RDSPort
           RDS_DB_NAME: !Ref RDSDbName
-          RDS_USERNAME: !Ref RDSUsername
-          RDS_PASSWORD: !Ref RDSPassword
+          RDS_SECRET_ARN: !Ref DatabaseSecretArn
+          RDS_CA_BUNDLE: /opt/certs/global-bundle.pem
           COGNITO_CUSTOMER_POOL_ID: !Ref CustomerUserPoolId
           COGNITO_REVIEWER_POOL_ID: !Ref ReviewerUserPoolId
           COGNITO_APP_CLIENT_ID: !Ref CustomerAppClientId
           COGNITO_REVIEWER_APP_CLIENT_ID: !Ref ReviewerAppClientId
           S3_DOCUMENTS_BUCKET: !Ref DocumentsBucket
           SQS_QUEUE_URL: !Ref SQSQueueUrl
-          SNS_TOPIC_ARN: !Ref SNSTopicArn
           SES_SENDER_EMAIL: !Ref SESSenderEmail
           API_BASE_URL: !Sub https://${ApiGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref BackendLambdaSecurityGroupId
+        SubnetIds: !Ref PrivateSubnetIds
+      Layers:
+        - !Ref SharedNotificationsLayerArn
       Policies:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
         - Version: "2012-10-17"
           Statement:
             - Effect: Allow
               Action:
                 - sqs:SendMessage
-              Resource: !Ref SQSQueueUrl
+              Resource: !Ref SQSQueueArn
             - Effect: Allow
               Action:
                 - sns:Publish
-              Resource: !Ref SNSTopicArn
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  aws:RequestedRegion: !Ref AWS::Region
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminGetUser
+              Resource: !Ref CustomerUserPoolArn
             - Effect: Allow
               Action:
                 - ses:SendEmail
                 - ses:SendRawEmail
-              Resource: "*"
+              Resource: !Ref SESIdentityArn
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref DatabaseSecretArn
             - Effect: Allow
               Action:
                 - s3:PutObject
                 - s3:GetObject
-                - s3:DeleteObject
               Resource:
-                - !Sub arn:aws:s3:::${DocumentsBucket}/*
-                - !Sub arn:aws:s3:::${DocumentsBucket}
+                - !Sub 'arn:aws:s3:::${DocumentsBucket}/documents/*'
       Events:
         ApiEvent:
           Type: Api
@@ -127,11 +170,17 @@ Resources:
             RestApiId: !Ref ApiGatewayApi
             Path: /{proxy+}
             Method: ANY
+        RootApiEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ApiGatewayApi
+            Path: /
+            Method: ANY
 
   ApiGatewayApi:
     Type: AWS::Serverless::Api
     Properties:
-      Name: pramana-kyc-api-${Environment}
+      Name: !Sub pramana-kyc-api-${Environment}
       StageName: !Ref Environment
       DefinitionBody:
         openapi: "3.0.1"
@@ -147,3 +196,6 @@ Outputs:
   BackendLambdaArn:
     Description: Backend Lambda function ARN
     Value: !GetAtt BackendLambdaFunction.Arn
+  ApiName:
+    Description: API Gateway name for shared CloudWatch alarm wiring.
+    Value: !Sub 'pramana-kyc-api-${Environment}'

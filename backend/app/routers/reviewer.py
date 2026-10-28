@@ -1,17 +1,17 @@
 """Reviewer routes: dashboard, queue, case detail, decisions, audit."""
 
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 
-from app.config import settings
 from app.database import get_db
 from app.dependencies import get_current_reviewer
 from app.models.audit import AuditEvent
 from app.models.customer import Customer
-from app.models.kyc import KYCAttempt, KYCCase, KYCDecision, KYCDocument
+from app.models.kyc import KYCAttempt, KYCCase
 from app.models.reviewer import Reviewer
 from app.schemas.reviewer import (
     ReviewerDashboardResponse,
@@ -21,12 +21,16 @@ from app.schemas.reviewer import (
     ReviewerDecisionRequest,
     ReviewerDecisionResponse,
     ReviewerAuditResponse,
-    AuditEventResponse,
 )
 from app.services.kyc_service import KYCService
 from app.services.s3 import generate_presigned_get_url
 
 router = APIRouter()
+
+REVIEW_QUEUE_STATUSES = ("REVIEW_REQUIRED", "REUPLOAD_PENDING")
+CASE_STATUS_PATTERN = (
+    "^(PENDING|PROCESSING|AUTO_VERIFIED|REVIEW_REQUIRED|APPROVED|REJECTED|REUPLOAD_PENDING)$"
+)
 
 
 @router.get(
@@ -38,19 +42,31 @@ def get_dashboard(
     db: Session = Depends(get_db),
 ):
     """Get reviewer dashboard summary counts."""
+    now = datetime.now(timezone.utc)
+    start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
     total_cases = db.query(KYCCase).count()
     pending_review = (
         db.query(KYCCase)
-        .filter(KYCCase.status.in_(["REVIEW_REQUIRED", "REUPLOAD_PENDING"]))
+        .filter(KYCCase.status.in_(REVIEW_QUEUE_STATUSES))
         .count()
     )
+    # Case updated_at is the persisted transition timestamp available in the
+    # current schema; metrics are UTC-day counts, not lifetime status totals.
     auto_verified_today = (
         db.query(KYCCase)
-        .filter(KYCCase.status == "AUTO_VERIFIED")
+        .filter(KYCCase.status == "AUTO_VERIFIED", KYCCase.updated_at >= start_of_day)
         .count()
     )
-    approved_today = db.query(KYCCase).filter(KYCCase.status == "APPROVED").count()
-    rejected_today = db.query(KYCCase).filter(KYCCase.status == "REJECTED").count()
+    approved_today = (
+        db.query(KYCCase)
+        .filter(KYCCase.status == "APPROVED", KYCCase.updated_at >= start_of_day)
+        .count()
+    )
+    rejected_today = (
+        db.query(KYCCase)
+        .filter(KYCCase.status == "REJECTED", KYCCase.updated_at >= start_of_day)
+        .count()
+    )
 
     return ReviewerDashboardResponse(
         pending_review=pending_review,
@@ -75,7 +91,7 @@ def get_review_queue(
     query = (
         db.query(KYCCase)
         .options(joinedload(KYCCase.attempts).joinedload(KYCAttempt.field_comparisons))
-        .filter(KYCCase.status.in_(["REVIEW_REQUIRED", "REUPLOAD_PENDING"]))
+        .filter(KYCCase.status.in_(REVIEW_QUEUE_STATUSES))
         .order_by(KYCCase.updated_at.desc())
     )
 
@@ -119,7 +135,7 @@ def list_cases(
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    status: Optional[str] = Query(None),
+    status: Optional[str] = Query(None, pattern=CASE_STATUS_PATTERN),
 ):
     """List all KYC cases with optional status filter."""
     query = db.query(KYCCase).order_by(KYCCase.updated_at.desc())
@@ -157,7 +173,17 @@ def get_case_detail(
     db: Session = Depends(get_db),
 ):
     """Get full case detail for a reviewer, including customer, attempts, and audit."""
-    case = db.query(KYCCase).filter_by(id=case_id).first()
+    case = (
+        db.query(KYCCase)
+        .options(
+            joinedload(KYCCase.attempts).joinedload(KYCAttempt.document),
+            joinedload(KYCCase.attempts).joinedload(KYCAttempt.extracted_fields),
+            joinedload(KYCCase.attempts).joinedload(KYCAttempt.field_comparisons),
+            joinedload(KYCCase.attempts).joinedload(KYCAttempt.decision),
+        )
+        .filter_by(id=case_id)
+        .first()
+    )
     if case is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -202,15 +228,15 @@ def get_case_detail(
     # Attempt history
     attempt_history = []
     for a in case.attempts:
-        decision = db.query(KYCDecision).filter_by(attempt_id=a.id).first()
         attempt_history.append(
             {
+                "attempt_id": str(a.id),
                 "attempt_number": a.attempt_number,
                 "document_type": a.document_type,
                 "status": a.status,
                 "submitted_at": a.submitted_at.isoformat(),
                 "completed_at": a.completed_at.isoformat() if a.completed_at else None,
-                "decision": decision.decision if decision else None,
+                "decision": a.decision.decision if a.decision else None,
             }
         )
 
@@ -266,7 +292,9 @@ def decide_case(
     db: Session = Depends(get_db),
 ):
     """Submit a reviewer decision (APPROVED, REJECTED, or REUPLOAD_REQUESTED)."""
-    case = db.query(KYCCase).filter_by(id=case_id).first()
+    # Serialize decisions for one case so concurrent submissions cannot both
+    # pass the REVIEW_REQUIRED transition check.
+    case = db.query(KYCCase).filter_by(id=case_id).with_for_update().first()
     if case is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

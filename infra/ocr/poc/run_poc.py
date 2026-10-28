@@ -8,8 +8,24 @@ import tempfile
 import time
 from pathlib import Path
 
-from make_fixtures import create_fixtures
 from pramana_ocr.pipeline import extract_document_fields
+from pramana_ocr.verification import compare_fields
+
+
+EXPECTED_NORMALIZED = {
+    "AADHAAR": {
+        "name": "ARJUN DEMO",
+        "date_of_birth": "2000-01-02",
+        "gender": "male",
+        "aadhaar_number": "123456789012",
+    },
+    "PAN": {
+        "name": "ARJUN DEMO",
+        "father_name": "RAVI DEMO",
+        "date_of_birth": "2000-01-02",
+        "pan_number": "ABCDE1234F",
+    },
+}
 
 
 def main() -> int:
@@ -22,6 +38,8 @@ def main() -> int:
             "synthetic-aadhaar.png", "synthetic-pan.png", "synthetic-aadhaar.pdf"
         )]
     else:
+        from make_fixtures import create_fixtures
+
         with tempfile.TemporaryDirectory(prefix="pramana-ocr-poc-") as temporary_dir:
             fixtures = create_fixtures(Path(temporary_dir))
             return run_fixtures(fixtures)
@@ -40,19 +58,35 @@ def run_fixtures(fixtures: list[Path]) -> int:
         start = time.perf_counter()
         fields = extract_document_fields(path.read_bytes(), content_type, document_type)
         elapsed = time.perf_counter() - start
+        expected = EXPECTED_NORMALIZED[document_type]
+        normalized = {
+            name: details.get("normalized_value")
+            for name, details in fields.items()
+        }
+        comparison = compare_fields(expected, normalized, expected)
         # Never print OCR text or extracted values, even for synthetic fixtures.
         print(
             f"{document_type}: extracted keys={','.join(sorted(fields)) or '(none)'}; "
+            f"comparison={comparison['overall_status']}; "
+            f"match_percentage={comparison['match_percentage']}; "
             f"elapsed_seconds={elapsed:.2f}"
         )
-        required = {"name", "date_of_birth"}
-        if document_type == "AADHAAR":
-            required |= {"gender", "aadhaar_number"}
-        else:
-            required.add("pan_number")
-        missing = required - fields.keys()
+        missing = expected.keys() - fields.keys()
         if missing:
             print(f"{document_type}: missing expected synthetic fixture fields: {','.join(sorted(missing))}", file=sys.stderr)
+            return 1
+        mismatched = sorted(
+            name for name, value in expected.items()
+            if normalized.get(name) != value
+        )
+        if mismatched:
+            print(
+                f"{document_type}: unexpected normalized fields: {','.join(mismatched)}",
+                file=sys.stderr,
+            )
+            return 1
+        if comparison["overall_status"] != "AUTO_VERIFIED" or comparison["match_percentage"] != 100.0:
+            print(f"{document_type}: expected synthetic reference did not match", file=sys.stderr)
             return 1
     return 0
 

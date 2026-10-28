@@ -21,7 +21,8 @@ class KYCCase(Base):
         PGUUID(as_uuid=True), ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True
     )
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="PENDING", index=True)
-    # PENDING, PROCESSING, AUTO_VERIFIED, APPROVED, REJECTED, REUPLOAD_PENDING
+    # PENDING, PROCESSING, AUTO_VERIFIED, REVIEW_REQUIRED, APPROVED, REJECTED,
+    # REUPLOAD_PENDING
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

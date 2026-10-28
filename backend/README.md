@@ -28,7 +28,7 @@ backend/
       verification.py     ← OCR worker message contract (shared with Person A)
       reviewer.py         ← Reviewer dashboard, queue, decision, audit schemas
     routers/
-      auth.py             ← POST /auth/register, confirm, login, refresh, logout
+      auth.py             ← POST /auth/register and /auth/confirm; Cognito profile bootstrap
       customer.py         ← GET/PUT /customer/profile, GET /customer/kyc/status
       kyc.py              ← POST /kyc/upload-url, submit, GET /kyc/attempts
       reviewer.py         ← GET /reviewer/dashboard, queue, cases, decide, audit
@@ -45,7 +45,9 @@ backend/
   requirements.txt        ← Python dependencies
   .env.example            ← Environment variable template (copy to .env)
   .env                    ← Local development values (git-ignored, DO NOT COMMIT)
-  template.yaml           ← AWS SAM template (coordinate with Person A)
+  template.yaml           ← Backend/API SAM component (integrate with Person A)
+  infrastructure/
+    database.yaml         ← Private RDS component; requires Person A network outputs/review
   alembic.ini             ← Alembic configuration
 ```
 
@@ -56,9 +58,12 @@ backend/
 |--------|------|-------------|
 | POST | `/auth/register` | Register new customer in Cognito |
 | POST | `/auth/confirm` | Confirm registration + create RDS customer row |
-| POST | `/auth/login` | Login — returns Cognito tokens |
-| POST | `/auth/refresh` | Refresh access token |
-| POST | `/auth/logout` | Sign out (requires customer JWT) |
+
+Amplify Auth owns customer/reviewer sign-in, token refresh, and sign-out. The
+frontend sends Cognito access tokens to protected API routes; FastAPI validates
+the signature, pool issuer, expiry, `token_use`, and app-client ID before
+applying customer/reviewer authorization. The backend does not issue custom
+JWTs or duplicate Cognito sessions.
 
 ### Customer (customer JWT)
 | Method | Path | Description |
@@ -123,11 +128,12 @@ reviewers (separate Cognito pool)
 ```bash
 cd backend
 
-# 1. Copy env template and fill in values from Person A
+# 1. Copy env template and fill in local/test values (never use these defaults in AWS)
 cp .env.example .env
 
-# 2. Install dependencies
-pip install -r requirements.txt
+# 2. Install application and test dependencies, then the shared notification package
+pip install -r requirements-dev.txt
+pip install -e ../infra/shared
 
 # 3. Run migrations (requires PostgreSQL)
 alembic upgrade head
@@ -139,15 +145,64 @@ uvicorn app.main:app --reload --port 8000
 sam local start-api
 ```
 
+## Database and deployment integration
+
+The database component template is `infrastructure/database.yaml`. It creates a
+private encrypted PostgreSQL instance, RDS-managed master credentials in Secrets
+Manager, and a DB subnet group. It intentionally consumes rather than creates
+the shared VPC and database security group. The dev stack is now deployed as
+`pramana-dev-database`; current non-secret outputs are in
+[`COGNITO_OUTPUTS.md`](COGNITO_OUTPUTS.md) and
+[`IMPLEMENTATION_HANDOFF.md`](IMPLEMENTATION_HANDOFF.md). The instance is
+`db.t4g.micro`, 20 GiB, single-AZ, and has one-day automated backup retention to
+fit the account's Free Plan. It is encrypted and not publicly accessible.
+
+Person A deployed outbound-only IPv6 egress without NAT or interface endpoints.
+A temporary read-only Lambda in the same private subnets successfully called
+Secrets Manager, SQS, SNS, Cognito, and SES APIs. This verifies the service
+network path, not B's deployed backend Lambda, secret retrieval, RDS connection,
+or migration. The workstation has no route to private RDS, so apply the Alembic
+migration from a controlled runner inside the approved VPC before API/worker
+deployment.
+
+For any new environment, obtain and review:
+
+- At least two private subnet IDs in different Availability Zones.
+- A database security group allowing TCP 5432 only from approved application
+  security groups (backend and OCR worker as needed).
+- Person A's approved stack/deployment path and a reviewed change set.
+- An explicitly accepted DB instance class and cost estimate.
+
+Deploy the database component first, then apply `alembic upgrade head` from a
+controlled migration runner, then deploy the API/worker components. Do not run
+migrations in Lambda startup. Pass only the database endpoint/name and secret
+ARN to the backend component; the Lambda retrieves credentials from Secrets
+Manager using its scoped IAM permission. The database password is never an
+ordinary CloudFormation parameter or source-controlled setting.
+
+`template.yaml` consumes the database secret ARN, private subnet IDs, backend
+Lambda security group, SQS queue ARN/URL, SES identity ARN, Cognito settings,
+and Person A's shared notifications layer ARN. It sets
+`Ipv6AllowedForDualStack: true` and uses dual-stack endpoints for SQS/SNS/SES.
+It does not create a duplicate notifications layer. FastAPI is the authorization
+boundary for customer/reviewer routes; API Gateway remains a proxy without a
+second authorizer. Share the B-owned change set with Person A for review before
+execution.
+
 ## Coordination with Person A
 
-Before deploying, obtain these values from Person A:
-- RDS host, port, db name, username, password
-- Cognito customer & reviewer pool IDs and app client IDs
-- S3 documents bucket name
-- SQS queue URL
-- SNS topic ARN
-- SES sender email
+Before deploying, coordinate these non-secret outputs and references:
+- From A: VPC ID, private subnet IDs in two Availability Zones, database security
+  group ID, backend/worker security group IDs, document bucket name/ARN, standard
+  SQS queue URL/ARN, and `us-east-1` region.
+- From B: RDS endpoint/port/database name and Secrets Manager ARN, Cognito
+  customer/reviewer pool and app-client IDs, SES sender identity, and API outputs.
+- SMS is direct-to-phone through the shared notification module; do not use the
+  foundation alarm topic for customer notifications. SES sender identity is
+  still pending a verified sender address/domain.
+
+The RDS endpoint and secret ARN are supplied by the Person B database stack.
+Never put the database password in this README, chat, or source control.
 
 ## Security
 
@@ -155,6 +210,7 @@ Before deploying, obtain these values from Person A:
 - Cognito secrets are never in `NEXT_PUBLIC_*` variables
 - S3 keys are server-derived (no client-controlled paths)
 - Presigned URLs are short-lived
-- JWTs verified via Cognito JWKS with issuer/audience/expiry checks
+- Cognito access tokens verified via JWKS, issuer, expiry, `token_use`, and the
+  selected pool's app-client ID
 - Audit events are append-only (no update/delete endpoints)
 - Rejection SMS contains no sensitive details (portal-only)

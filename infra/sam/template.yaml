@@ -1,21 +1,23 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Pramana document and frontend foundation — keeps documents private and serves
-  the static frontend through CloudFront while upload processing contracts are finalized.
+  Pramana shared private network and processing foundation — keeps IPv4 NAT
+  disabled and uses outbound-only IPv6 for required public AWS service APIs.
 
 Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
-    arch: Private S3 documents -> SQS OCR queue; private frontend S3 -> CloudFront OAC
+    arch: Private VPC/RDS -> Lambda; standard SQS -> OCR Lambda; private S3 -> CloudFront OAC when enabled; no NAT; outbound-only IPv6 API access
     must:
-      - Document bucket blocks public access and requires TLS; application role access must be scoped when those roles are defined
-      - Enable exactly one upload-to-queue path after the shared contract is agreed
+      - Only POST /kyc/submit enqueues OCR; do not add an S3 event trigger
+      - Keep the RDS database in private subnets; allow PostgreSQL ingress only from the two Lambda security groups
+      - Document bucket blocks public access and requires TLS; OCR reads only documents/*
       - Person B and Person C administrator access stays unchanged until Person A removes it manually
-      - Do not deploy this foundation until account-specific cost review and user approval
+      - Keep NAT disabled; route Lambda IPv6 egress only through an egress-only internet gateway
+      - Limit Lambda IPv6 egress to TLS 443; keep PostgreSQL ingress restricted to Lambda security groups
     ref:
       - at: infra/README.md
-        has: SAM foundation scope, resource rationale, deployment gate, and open contracts
+        has: SAM resources, private network egress, build steps, deployment gate, and open contracts
       - at: context/person-a.md
         has: Person A security, storage, queue, and Cognito ownership requirements
       - at: implementation/PERSON_A_IMPLEMENTATION_PLAN.md
@@ -34,12 +36,421 @@ Parameters:
       - dev
       - test
       - prod
+  EnableOCRWorker:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable after Person B's database secret and SES identity are ready.
+  EnableNatGateway:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable only when a runtime dependency requires public internet egress and the cost is approved.
+  EnableCloudFront:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable after AWS account verification permits CloudFront distribution creation.
+  FrontendAllowedOrigin:
+    Type: String
+    Default: http://localhost:3000
+    AllowedPattern: '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$'
+    Description: Browser origin allowed to upload documents while CloudFront is disabled.
+  DatabaseSecretArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$'
+    Description: Person B's Secrets Manager ARN for the RDS PostgreSQL credentials.
+  DatabaseName:
+    Type: String
+    Default: pramana_kyc
+    AllowedPattern: '^[A-Za-z0-9_-]{1,63}$'
+  SESSenderEmail:
+    Type: String
+    Default: ''
+    Description: Verified SES sender address supplied by Person B.
+  SESSenderIdentityArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:ses:[a-z0-9-]+:[0-9]{12}:identity/.+$'
+    Description: Verified SES identity ARN supplied by Person B.
+  AlarmEmail:
+    Type: String
+    Default: ''
+    Description: Optional email recipient for the shared infrastructure alarms.
+  RDSInstanceIdentifier:
+    Type: String
+    Default: ''
+    Description: Optional Person B RDS identifier for its CPU alarm.
+  BackendApiName:
+    Type: String
+    Default: ''
+    Description: Optional Person B REST API name for its 5xx alarm.
+
+Rules:
+  OCRWorkerInputsRequired:
+    RuleCondition: !Equals [!Ref EnableOCRWorker, 'true']
+    Assertions:
+      - Assert: !Not [!Equals [!Ref DatabaseSecretArn, '']]
+        AssertDescription: DatabaseSecretArn is required when EnableOCRWorker is true.
+      - Assert: !Not [!Equals [!Ref SESSenderEmail, '']]
+        AssertDescription: SESSenderEmail is required when EnableOCRWorker is true.
+      - Assert: !Not [!Equals [!Ref SESSenderIdentityArn, '']]
+        AssertDescription: SESSenderIdentityArn is required when EnableOCRWorker is true.
+
+Conditions:
+  OCRWorkerEnabled: !Equals [!Ref EnableOCRWorker, 'true']
+  NatGatewayEnabled: !Equals [!Ref EnableNatGateway, 'true']
+  DeployCloudFront: !Equals [!Ref EnableCloudFront, 'true']
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, '']]
+  HasRDSIdentifier: !Not [!Equals [!Ref RDSInstanceIdentifier, '']]
+  HasBackendApiName: !Not [!Equals [!Ref BackendApiName, '']]
 
 Transform: AWS::Serverless-2016-10-31
 
 Resources:
+  ProjectVPC:
+    Type: AWS::EC2::VPC
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Shared isolated network for private PostgreSQL and API/worker Lambdas; DNS enabled for AWS endpoints.
+        must:
+          - Do not expose RDS to public subnets or public ingress.
+        mutable: change-with-constraints
+    Properties:
+      CidrBlock: 10.40.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-vpc'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  ProjectVPCIpv6CidrBlock:
+    Type: AWS::EC2::VPCCidrBlock
+    Properties:
+      VpcId: !Ref ProjectVPC
+      AmazonProvidedIpv6CidrBlock: true
+
+  LambdaEgressOnlyInternetGateway:
+    Type: AWS::EC2::EgressOnlyInternetGateway
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Enables outbound-only IPv6 access to the AWS public API endpoints required by private Lambdas without a fixed hourly gateway charge.
+        must:
+          - Do not add an IPv4 NAT gateway or internet-gateway route for private subnets.
+          - Keep Lambda security-group IPv6 egress limited to TCP 443.
+        mutable: change-with-constraints
+    Properties:
+      VpcId: !Ref ProjectVPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Condition: NatGatewayEnabled
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Provides controlled outbound egress through the NAT gateway; no application resource is placed in the public subnet.
+        must:
+          - Do not attach public IP addresses to either Lambda or RDS resources.
+        mutable: change-with-constraints
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-igw'
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: NatGatewayEnabled
+    Properties:
+      VpcId: !Ref ProjectVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Condition: NatGatewayEnabled
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Hosts only the NAT gateway used for outbound service calls from private Lambda subnets.
+        must:
+          - Never place Lambda functions or RDS in this subnet.
+        mutable: change-with-constraints
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.40.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-public-a'
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: First private subnet for Lambda ENIs and Person B's RDS subnet group.
+        must:
+          - No public IP assignment or direct internet route.
+        mutable: change-with-constraints
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.40.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-private-a'
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Second private subnet in another AZ for RDS subnet-group and Lambda availability requirements.
+        must:
+          - No public IP assignment or direct internet route.
+        mutable: change-with-constraints
+    Properties:
+      VpcId: !Ref ProjectVPC
+      CidrBlock: 10.40.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-private-b'
+
+  PrivateSubnetAIpv6CidrBlock:
+    Type: AWS::EC2::SubnetCidrBlock
+    DependsOn: ProjectVPCIpv6CidrBlock
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      Ipv6CidrBlock: !Select [0, !Cidr [!Select [0, !GetAtt ProjectVPC.Ipv6CidrBlocks], 256, 64]]
+
+  PrivateSubnetBIpv6CidrBlock:
+    Type: AWS::EC2::SubnetCidrBlock
+    DependsOn: ProjectVPCIpv6CidrBlock
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      Ipv6CidrBlock: !Select [1, !Cidr [!Select [0, !GetAtt ProjectVPC.Ipv6CidrBlocks], 256, 64]]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: NatGatewayEnabled
+    Properties:
+      VpcId: !Ref ProjectVPC
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    Condition: NatGatewayEnabled
+    Metadata:
+      guard:
+        SuppressedRules:
+          - NO_UNRESTRICTED_ROUTE_TO_IGW
+      com.aws.cloudformation.Context:
+        why: Gives the public subnet that hosts only the NAT gateway its required internet route; private subnets route through NAT instead.
+        must:
+          - Keep application and database workloads out of the public subnet.
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: NatGatewayEnabled
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  NatEIP:
+    Type: AWS::EC2::EIP
+    Condition: NatGatewayEnabled
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: NatGatewayEnabled
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Single-AZ NAT keeps SES API, Cognito JWKS, and AWS SDK calls reachable without public Lambda addresses; this is a cost-sensitive demo tradeoff, not multi-AZ egress.
+        must:
+          - Review hourly and data-transfer charges before deployment.
+        mutable: review-required
+    DependsOn: PublicSubnetRouteTableAssociation
+    Properties:
+      AllocationId: !GetAtt NatEIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-nat'
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProjectVPC
+
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProjectVPC
+
+  PrivateDefaultRouteA:
+    Type: AWS::EC2::Route
+    Condition: NatGatewayEnabled
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateDefaultRouteB:
+    Type: AWS::EC2::Route
+    Condition: NatGatewayEnabled
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateIpv6DefaultRouteA:
+    Type: AWS::EC2::Route
+    DependsOn: PrivateSubnetAIpv6CidrBlock
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationIpv6CidrBlock: ::/0
+      EgressOnlyInternetGatewayId: !Ref LambdaEgressOnlyInternetGateway
+
+  PrivateIpv6DefaultRouteB:
+    Type: AWS::EC2::Route
+    DependsOn: PrivateSubnetBIpv6CidrBlock
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      DestinationIpv6CidrBlock: ::/0
+      EgressOnlyInternetGatewayId: !Ref LambdaEgressOnlyInternetGateway
+
+  PrivateSubnetRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PrivateSubnetRouteTableAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTableB
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Keeps private Lambda document reads on the AWS network and avoids routing S3 traffic through the NAT gateway.
+        must:
+          - Allow only project document-object operations through this endpoint.
+        mutable: change-with-constraints
+    Properties:
+      VpcId: !Ref ProjectVPC
+      VpcEndpointType: Gateway
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      RouteTableIds:
+        - !Ref PrivateRouteTableA
+        - !Ref PrivateRouteTableB
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource: !Sub '${DocumentBucket.Arn}/documents/*'
+
+  OCRWorkerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${ProjectName} OCR worker outbound access'
+      VpcId: !Ref ProjectVPC
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIpv6: ::/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-ocr-lambda-sg'
+
+  BackendLambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${ProjectName} backend outbound access'
+      VpcId: !Ref ProjectVPC
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIpv6: ::/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-backend-lambda-sg'
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Person B attaches this group to PostgreSQL; only A's worker and B's API function groups can connect.
+        must:
+          - Never add public or 0.0.0.0/0 ingress to PostgreSQL.
+        mutable: change-with-constraints
+    Properties:
+      GroupDescription: !Sub '${ProjectName} private PostgreSQL access'
+      VpcId: !Ref ProjectVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref OCRWorkerSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref BackendLambdaSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-database-sg'
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Sends operational alarms to the optional project contact; customer notifications remain in Person B's service.
+        must:
+          - Keep alarms separate from customer KYC notifications.
+        mutable: change-with-constraints
+    Properties:
+      TopicName: !Sub '${ProjectName}-${Environment}-alarms'
+      KmsMasterKeyId: alias/aws/sns
+
+  AlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlarmEmail
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
   DocumentAccessLogsBucket:
     Type: AWS::S3::Bucket
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED
+      com.aws.cloudformation.Context:
+        why: Receives server access logs from the document bucket; this terminal log sink cannot also be its own logging destination.
+        must:
+          - Keep the log bucket private and encrypted.
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
@@ -74,7 +485,10 @@ Resources:
             AllowedMethods:
               - PUT
             AllowedOrigins:
-              - !Sub 'https://${FrontendDistribution.DomainName}'
+              - !If
+                - DeployCloudFront
+                - !Sub 'https://${FrontendDistribution.DomainName}'
+                - !Ref FrontendAllowedOrigin
             MaxAge: 3600
       LoggingConfiguration:
         DestinationBucketName: !Ref DocumentAccessLogsBucket
@@ -92,6 +506,14 @@ Resources:
 
   DocumentBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_SSL_REQUESTS_ONLY
+      com.aws.cloudformation.Context:
+        why: Denies non-TLS requests on this bucket's exact bucket and object ARNs; the registry rule only recognizes Resource '*'.
+        must:
+          - Preserve the scoped aws:SecureTransport deny.
     Properties:
       Bucket: !Ref DocumentBucket
       PolicyDocument:
@@ -110,6 +532,14 @@ Resources:
 
   DocumentAccessLogsBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_SSL_REQUESTS_ONLY
+      com.aws.cloudformation.Context:
+        why: Denies non-TLS requests on this bucket's exact bucket and object ARNs; the registry rule only recognizes Resource '*'.
+        must:
+          - Preserve the scoped aws:SecureTransport deny.
     Properties:
       Bucket: !Ref DocumentAccessLogsBucket
       PolicyDocument:
@@ -139,6 +569,14 @@ Resources:
 
   FrontendBucket:
     Type: AWS::S3::Bucket
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED
+      com.aws.cloudformation.Context:
+        why: Private static assets are served through CloudFront OAC; server access logging is reserved for the sensitive KYC document bucket to avoid duplicate static-asset logs.
+        must:
+          - Keep versioning, encryption, and all public-access blocks enabled.
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
@@ -154,9 +592,12 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
 
   FrontendOriginAccessControl:
     Type: AWS::CloudFront::OriginAccessControl
+    Condition: DeployCloudFront
     Properties:
       OriginAccessControlConfig:
         Name: !Sub '${ProjectName}-${Environment}-frontend'
@@ -166,6 +607,7 @@ Resources:
 
   FrontendDistribution:
     Type: AWS::CloudFront::Distribution
+    Condition: DeployCloudFront
     Properties:
       DistributionConfig:
         Comment: !Sub '${ProjectName}-${Environment} static frontend'
@@ -205,6 +647,15 @@ Resources:
 
   FrontendBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    Condition: DeployCloudFront
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_SSL_REQUESTS_ONLY
+      com.aws.cloudformation.Context:
+        why: Denies non-TLS requests on this bucket's exact bucket and object ARNs; the registry rule only recognizes Resource '*'.
+        must:
+          - Preserve the scoped aws:SecureTransport deny and CloudFront OAC read-only access.
     Properties:
       Bucket: !Ref FrontendBucket
       PolicyDocument:
@@ -232,6 +683,12 @@ Resources:
 
   OCRDeadLetterQueue:
     Type: AWS::SQS::Queue
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Holds OCR messages that exhausted their bounded receive attempts for operator inspection and replay.
+        must:
+          - Keep the queue encrypted and retain messages for at least 14 days.
+        mutable: change-with-constraints
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
@@ -240,6 +697,13 @@ Resources:
 
   OCRQueue:
     Type: AWS::SQS::Queue
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Standard queue receives one job from POST /kyc/submit; Lambda handles at-least-once delivery idempotently.
+        must:
+          - Do not add an S3 notification path alongside the API producer.
+          - Queue visibility timeout must remain at least six times worker timeout.
+        mutable: change-with-constraints
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
@@ -248,9 +712,349 @@ Resources:
         deadLetterTargetArn: !GetAtt OCRDeadLetterQueue.Arn
         maxReceiveCount: 3
       SqsManagedSseEnabled: true
-      VisibilityTimeout: 300
+      VisibilityTimeout: 720
+
+  OCRRuntimeLayer:
+    Type: AWS::Serverless::LayerVersion
+    Condition: OCRWorkerEnabled
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Contains the Lambda-compatible Tesseract, OpenCV, PDFium, image libraries, language data, and verified RDS CA bundle built by infra/ocr/scripts/build_layer.sh.
+        must:
+          - Build for Python 3.12 x86_64 and keep the function plus all layers within Lambda's unzipped package quota.
+        mutable: review-required
+    Properties:
+      LayerName: !Sub '${ProjectName}-${Environment}-ocr-runtime'
+      Description: Tesseract/OpenCV/PDFium plus RDS TLS trust bundle for Pramana OCR.
+      ContentUri: ../ocr/dist/layer
+      CompatibleRuntimes:
+        - python3.12
+      CompatibleArchitectures:
+        - x86_64
+
+  SharedNotificationsLayer:
+    Type: AWS::Serverless::LayerVersion
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Publishes the same notification templates and AWS client wrappers to the backend and OCR worker.
+        must:
+          - Keep SMS generic and free of document values or mismatch details.
+        mutable: change-with-constraints
+    Properties:
+      LayerName: !Sub '${ProjectName}-${Environment}-shared-notifications'
+      Description: Shared Pramana SNS/SES notification templates and adapters.
+      ContentUri: ../shared/dist/layer
+      CompatibleRuntimes:
+        - python3.11
+        - python3.12
+      CompatibleArchitectures:
+        - x86_64
+
+  OCRWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: OCRWorkerEnabled
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Retains the OCR worker's sanitized operational logs for 30 days.
+        must:
+          - Never log OCR text, extracted identity values, phone numbers, or email addresses.
+        mutable: change-with-constraints
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-${Environment}-ocr-worker'
+      RetentionInDays: 30
+
+  OCRWorkerExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: OCRWorkerEnabled
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Worker-only runtime role; S3/Secrets/SQS/SES resources are scoped, SNS phone delivery is region-scoped because direct SMS has no topic ARN.
+        must:
+          - Do not add document writes, SQS sends, Cognito, or administrative IAM permissions.
+        mutable: change-with-constraints
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-ocr-worker-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole'
+      Policies:
+        - PolicyName: OCRWorkerRuntimeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadAttemptDocuments
+                Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${DocumentBucket.Arn}/documents/*'
+              - Sid: ReadDatabaseCredentials
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseSecretArn
+              - Sid: PollOCRQueue
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt OCRQueue.Arn
+              - Sid: SendCustomerSMS
+                Effect: Allow
+                Action: sns:Publish
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Sid: SendCustomerEmail
+                Effect: Allow
+                Action: ses:SendEmail
+                Resource: !Ref SESSenderIdentityArn
+              - Sid: WriteWorkerLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-ocr-worker:*'
+
+  OCRWorkerFunction:
+    Type: AWS::Serverless::Function
+    Condition: OCRWorkerEnabled
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: SQS event function runs the proven Python 3.12 x86_64 OCR stack, persists one attempt transactionally, and uses partial batch failures for retry.
+        must:
+          - Timeout is 120 seconds and queue visibility is at least 6x that value.
+          - Do not write OCR text or extracted values to logs.
+        mutable: change-with-constraints
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-ocr-worker'
+      Description: Processes one Pramana document attempt from the standard OCR queue.
+      CodeUri: ../ocr/src
+      Handler: pramana_ocr.worker.handler
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Role: !GetAtt OCRWorkerExecutionRole.Arn
+      Timeout: 120
+      MemorySize: 2048
+      ReservedConcurrentExecutions: 5
+      Layers:
+        - !Ref OCRRuntimeLayer
+        - !Ref SharedNotificationsLayer
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref OCRWorkerSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetA
+          - !Ref PrivateSubnetB
+        Ipv6AllowedForDualStack: true
+      Environment:
+        Variables:
+          DOCUMENTS_BUCKET: !Ref DocumentBucket
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          DATABASE_NAME: !Ref DatabaseName
+          SES_SENDER_EMAIL: !Ref SESSenderEmail
+          OCR_MAX_RECEIVE_COUNT: '3'
+          PATH: /opt/bin:/var/lang/bin:/usr/local/bin:/usr/bin:/bin
+          LD_LIBRARY_PATH: /opt/lib:/lib64:/usr/lib64
+          TESSDATA_PREFIX: /opt/tesseract/share/tessdata
+          RDS_CA_BUNDLE: /opt/certs/global-bundle.pem
+      Events:
+        OCRQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt OCRQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+            ScalingConfig:
+              MaximumConcurrency: 5
+
+  AlarmDlqDepth:
+    Type: AWS::CloudWatch::Alarm
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Alerts when any OCR message reaches the dead-letter queue after configured processing retries.
+        must:
+          - Treat missing queue metrics as non-breaching.
+        mutable: change-with-constraints
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-ocr-dlq-depth'
+      AlarmDescription: OCR jobs are waiting in the dead-letter queue.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt OCRDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  AlarmOCRWorkerErrors:
+    Type: AWS::CloudWatch::Alarm
+    Condition: OCRWorkerEnabled
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-ocr-worker-errors'
+      AlarmDescription: OCR worker errors exceeded five in five minutes.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref OCRWorkerFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  AlarmRDSCPU:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasRDSIdentifier
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-rds-cpu'
+      AlarmDescription: Person B RDS CPU utilization exceeded 80 percent.
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref RDSInstanceIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  AlarmBackend5xx:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasBackendApiName
+    Properties:
+      AlarmName: !Sub '${ProjectName}-${Environment}-backend-5xx'
+      AlarmDescription: Person B API Gateway 5xx responses exceeded ten in five minutes.
+      Namespace: AWS/ApiGateway
+      MetricName: 5XXError
+      Dimensions:
+        - Name: ApiName
+          Value: !Ref BackendApiName
+        - Name: Stage
+          Value: !Ref Environment
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  OperationsDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Gives operators one view of OCR queue backlog, DLQ depth, Lambda invocation count, errors, and duration.
+        must:
+          - Do not add customer names, identity values, phone numbers, email addresses, or OCR text to dashboard widgets.
+        mutable: change-with-constraints
+    Properties:
+      DashboardName: !Sub '${ProjectName}-${Environment}-operations'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "OCR queue and dead-letter backlog",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Maximum",
+                "metrics": [
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${OCRQueue.QueueName}", {"label": "OCR queue"}],
+                  ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", "${OCRDeadLetterQueue.QueueName}", {"label": "OCR DLQ"}]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "OCR worker activity and runtime",
+                "view": "timeSeries",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "${ProjectName}-${Environment}-ocr-worker", {"label": "Invocations"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "${ProjectName}-${Environment}-ocr-worker", {"label": "Errors"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "${ProjectName}-${Environment}-ocr-worker", {"label": "Average duration", "stat": "Average", "yAxis": "right"}]
+                ]
+              }
+            }
+          ]
+        }
 
 Outputs:
+  VPCId:
+    Description: Shared private VPC ID for Person B's RDS and backend Lambda.
+    Value: !Ref ProjectVPC
+  VPCIpv6CidrBlock:
+    Description: Amazon-provided IPv6 block assigned to the shared VPC.
+    Value: !Select [0, !GetAtt ProjectVPC.Ipv6CidrBlocks]
+  LambdaEgressOnlyInternetGatewayId:
+    Description: Egress-only IPv6 gateway shared by the two private subnets.
+    Value: !Ref LambdaEgressOnlyInternetGateway
+  PrivateSubnetIds:
+    Description: Comma-separated private subnet IDs for Person B's RDS subnet group and backend Lambda.
+    Value: !Join [',', [!Ref PrivateSubnetA, !Ref PrivateSubnetB]]
+  PrivateSubnetAId:
+    Description: First private subnet ID, in the first selected Availability Zone.
+    Value: !Ref PrivateSubnetA
+  PrivateSubnetAIpv6CidrBlock:
+    Description: IPv6 CIDR assigned to the first private subnet.
+    Value: !Select [0, !GetAtt PrivateSubnetA.Ipv6CidrBlocks]
+  PrivateSubnetAAvailabilityZone:
+    Description: Availability Zone containing PrivateSubnetA.
+    Value: !GetAtt PrivateSubnetA.AvailabilityZone
+  PrivateSubnetBId:
+    Description: Second private subnet ID, in a different selected Availability Zone.
+    Value: !Ref PrivateSubnetB
+  PrivateSubnetBIpv6CidrBlock:
+    Description: IPv6 CIDR assigned to the second private subnet.
+    Value: !Select [0, !GetAtt PrivateSubnetB.Ipv6CidrBlocks]
+  PrivateSubnetBAvailabilityZone:
+    Description: Availability Zone containing PrivateSubnetB.
+    Value: !GetAtt PrivateSubnetB.AvailabilityZone
+  BackendLambdaSecurityGroupId:
+    Description: Attach to Person B's backend Lambda; DatabaseSecurityGroup permits its PostgreSQL access.
+    Value: !Ref BackendLambdaSecurityGroup
+  OCRWorkerSecurityGroupId:
+    Description: Security group used by the OCR worker Lambda.
+    Value: !Ref OCRWorkerSecurityGroup
+  DatabaseSecurityGroupId:
+    Description: Attach to Person B's private RDS instance; ingress is limited to backend and OCR Lambda security groups.
+    Value: !Ref DatabaseSecurityGroup
   DocumentBucketName:
     Description: Private bucket for KYC documents.
     Value: !Ref DocumentBucket
@@ -258,16 +1062,18 @@ Outputs:
     Description: ARN of the private KYC document bucket.
     Value: !GetAtt DocumentBucket.Arn
   FrontendBucketName:
-    Description: Private S3 bucket served only through the CloudFront distribution.
+    Description: Private S3 bucket for frontend assets; CloudFront remains optional until account verification.
     Value: !Ref FrontendBucket
   FrontendDistributionId:
+    Condition: DeployCloudFront
     Description: CloudFront distribution ID for frontend deployment invalidations.
     Value: !Ref FrontendDistribution
   FrontendDistributionDomainName:
+    Condition: DeployCloudFront
     Description: CloudFront URL for the static frontend.
     Value: !GetAtt FrontendDistribution.DomainName
   OCRQueueUrl:
-    Description: URL of the standard OCR queue; no producer or trigger is wired yet.
+    Description: Standard queue URL; Person B's POST /kyc/submit is the only producer.
     Value: !Ref OCRQueue
   OCRQueueArn:
     Description: ARN of the standard OCR queue.
@@ -275,3 +1081,13 @@ Outputs:
   OCRDeadLetterQueueArn:
     Description: ARN of the OCR dead-letter queue.
     Value: !GetAtt OCRDeadLetterQueue.Arn
+  AlarmTopicArn:
+    Description: Topic ARN for infrastructure alarms; not used for customer notifications.
+    Value: !Ref AlarmTopic
+  OCRWorkerFunctionArn:
+    Condition: OCRWorkerEnabled
+    Description: ARN of the SQS-triggered OCR worker Lambda.
+    Value: !GetAtt OCRWorkerFunction.Arn
+  OperationsDashboardName:
+    Description: CloudWatch dashboard for queue and OCR worker metrics.
+    Value: !Ref OperationsDashboard

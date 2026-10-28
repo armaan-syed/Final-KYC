@@ -24,7 +24,7 @@ def upgrade() -> None:
     # --- customers ---
     op.create_table(
         "customers",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("cognito_sub", sa.String(length=255), nullable=False),
         sa.Column("full_name", sa.String(length=255), nullable=False),
         sa.Column("date_of_birth", sa.DateTime(timezone=True), nullable=False),
@@ -48,7 +48,7 @@ def upgrade() -> None:
     # --- kyc_cases ---
     op.create_table(
         "kyc_cases",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("customer_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("status", sa.String(length=30), nullable=False, server_default="PENDING"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
@@ -63,7 +63,7 @@ def upgrade() -> None:
     # --- kyc_attempts ---
     op.create_table(
         "kyc_attempts",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("kyc_case_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("attempt_number", sa.Integer(), nullable=False),
         sa.Column("document_type", sa.String(length=20), nullable=False),
@@ -80,7 +80,7 @@ def upgrade() -> None:
     # --- kyc_documents ---
     op.create_table(
         "kyc_documents",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("attempt_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("s3_bucket", sa.String(length=255), nullable=False),
         sa.Column("s3_key", sa.String(length=1024), nullable=False),
@@ -97,7 +97,7 @@ def upgrade() -> None:
     # --- extracted_fields ---
     op.create_table(
         "extracted_fields",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("attempt_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("field_name", sa.String(length=100), nullable=False),
         sa.Column("raw_value", sa.Text(), nullable=True),
@@ -112,7 +112,7 @@ def upgrade() -> None:
     # --- field_comparisons ---
     op.create_table(
         "field_comparisons",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("attempt_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("field_name", sa.String(length=100), nullable=False),
         sa.Column("customer_value", sa.Text(), nullable=True),
@@ -127,7 +127,7 @@ def upgrade() -> None:
     # --- kyc_decisions ---
     op.create_table(
         "kyc_decisions",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("attempt_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("decision", sa.String(length=30), nullable=False),
         sa.Column("decided_by", sa.String(length=255), nullable=True),
@@ -141,12 +141,12 @@ def upgrade() -> None:
     # --- audit_events ---
     op.create_table(
         "audit_events",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("kyc_case_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("attempt_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("actor", sa.String(length=255), nullable=False),
         sa.Column("action", sa.String(length=100), nullable=False),
-        sa.Column("details", postgresql.JSONB(as_text_type=True), nullable=True),
+        sa.Column("details", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["kyc_case_id"], ["kyc_cases.id"], ondelete="CASCADE"),
@@ -158,7 +158,7 @@ def upgrade() -> None:
     # --- reviewers ---
     op.create_table(
         "reviewers",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, default=sa.text("gen_random_uuid()")),
+        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("cognito_sub", sa.String(length=255), nullable=False),
         sa.Column("full_name", sa.String(length=255), nullable=False),
         sa.Column("email", sa.String(length=255), nullable=False),

@@ -4,9 +4,19 @@ Use this after and during the individual Person A, B, and C plans. It coordinate
 
 ## Final Project Integration
 
+## Current integration snapshot — 2026-10-29
+
+- The shared decisions and owner actions are recorded in `INTEGRATION_DECISIONS_2026-10-29.md`. B's latest `master` commit `cdfeedf` was fetched and fast-forwarded; A's reconciled changes are being validated before push.
+- Combined local verification: backend **33 passed** (34 dependency deprecation warnings); OCR/worker **33 passed, 1 skipped** (dedicated migrated PostgreSQL test DB not configured); frontend **2 passed** and `npm run build` succeeded as a static export. The build emitted `/dashboard`, `/reviewer/dashboard`, `/reviewer/queue`, and `/reviewer/cases/detail`. `npm audit --omit=dev` reports **3 production dependency vulnerabilities** (2 high, 1 critical); fixing them requires a Next.js/Zod major upgrade according to the current lockfile audit and needs C's compatibility review.
+- The Lambda-compatible OCR proof passed in Python 3.12 x86_64 for synthetic Aadhaar PNG, PAN PNG, and Aadhaar PDF. All auto-verified at 100%; combined function/layer size was 258,176,462 bytes of 262,144,000 bytes. Recheck package headroom before any dependency change.
+- A's `pramana-dev-foundation` is deployed with no NAT or interface endpoints; OCR and CloudFront remain disabled. B's private RDS is `available`, encrypted, and not publicly accessible. Cognito pools/clients exist; customer attributes and current auth-flow configuration were live-inspected.
+- A deployed the dual-stack private subnet route through egress-only gateway `eigw-0e03c52bb1008d130`. A reviewed change set and verified active subnet IPv6 routes plus TLS-only IPv6 Lambda egress. A temporary read-only Lambda in the same private subnets successfully called Secrets Manager, SQS, SNS, Cognito, and SES APIs. Its CloudFormation stack is still `DELETE_IN_PROGRESS` and must be confirmed deleted.
+- A reviewed the auth boundary: frontend uses Amplify SRP; registration/confirmation use FastAPI; protected calls carry Cognito access tokens validated by FastAPI for signature, issuer, expiry, token-use, and app-client ID. `/auth/login`, `/auth/refresh`, and `/auth/logout` are removed from backend source. This source-level review and A's network path resolve the A-owned blockers B reported, but do not prove the not-yet-deployed backend Lambda.
+- B has not applied the Alembic migration or verified the RDS catalog. No B-owned backend API change set was shared for review; API/Lambda is not deployed. SES sender identity and production access are pending. The OCR worker must remain disabled until migration and sender prerequisites are ready. No deployed end-to-end workflow is claimed.
+
 ### Integration sequence
 
-1. **Baseline and contract checkpoint:** all three agents inspect the same branch, review the context docs, record current code/test state, and resolve the shared contract table in the individual plans, including attempt-ID allocation, DB/SQS recovery, status vocabulary, public auth routes, and static routing.
+1. **Baseline and contract checkpoint:** shared queue, recovery, status, Cognito, notification, upload-limit, and static-routing decisions are recorded in `INTEGRATION_DECISIONS_2026-10-29.md`; owners implement that contract and report exceptions.
 2. **Person A foundation:** complete the Tesseract/OpenCV POC and deploy foundational infrastructure outputs; keep database private and document bucket private.
 3. **Person B data/API foundation:** create and test migration/models against a local PostgreSQL instance; share the API, status and queue schemas with A and C.
 4. **A/B worker integration:** run the OCR worker against B's schema and fixtures; verify each status/write/decision/audit event.
@@ -20,7 +30,7 @@ Use this after and during the individual Person A, B, and C plans. It coordinate
 | Boundary | Verification |
 |---|---|
 | API contract | Compare OpenAPI output or agreed schemas to frontend types and examples. Test all customer and reviewer routes, success/error payloads, dates, pagination and status values. |
-| Authentication | Verify public registration/confirmation/login flow, correct user pool and token client, refresh/expiry, API Gateway authorization, FastAPI role checks, and cross-role denial. |
+| Authentication | Verify public registration/confirmation, Amplify customer/reviewer SRP sessions, access-token expiry, FastAPI pool/client and role checks, and cross-role denial. API Gateway remains a proxy without a second authorizer. |
 | Database | Apply B's migrations to a clean PostgreSQL database, then process an OCR message using A's worker. Confirm customer → case → attempts → documents → extraction/comparisons → decision/audit foreign keys and state consistency. |
 | Document flow | Obtain a URL from B, upload directly from C to A's private bucket, submit metadata, and confirm exactly one message and matching S3 key/attempt ID reach A's worker. Verify rejected origins/content types/expired URLs fail safely. |
 | OCR/verification | Test sanitized Aadhaar and PAN success/mismatch cases, normalization, required-field behavior, full-match decision, reviewer queue state, and no data leakage in logs. |

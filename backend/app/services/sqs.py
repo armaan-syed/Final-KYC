@@ -8,6 +8,7 @@ import json
 import logging
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from app.config import settings
@@ -15,7 +16,11 @@ from app.schemas.verification import OCRWorkerMessage
 
 logger = logging.getLogger(__name__)
 
-sqs_client = boto3.client("sqs", region_name=settings.aws_region)
+sqs_client = boto3.client(
+    "sqs",
+    region_name=settings.aws_region,
+    config=Config(use_dualstack_endpoint=True),
+)
 
 
 def enqueue_ocr_job(
@@ -29,8 +34,8 @@ def enqueue_ocr_job(
 ) -> str:
     """Enqueue an OCR worker job for a submitted KYC attempt.
 
-    Returns the SQS message ID. Raises on failure so the caller can roll back
-    the database transaction if needed.
+    Returns the SQS message ID. The project queue is standard, so this request
+    must not include FIFO-only group or deduplication parameters.
     """
     message_body = OCRWorkerMessage(
         kyc_attempt_id=kyc_attempt_id,
@@ -45,8 +50,6 @@ def enqueue_ocr_job(
         response = sqs_client.send_message(
             QueueUrl=settings.sqs_queue_url,
             MessageBody=message_body.model_dump_json(),
-            MessageGroupId=f"kyc-{kyc_case_id}",
-            MessageDeduplicationId=str(kyc_attempt_id),
         )
     except ClientError as exc:
         logger.error("SQS send_message failed: %s", exc, exc_info=True)

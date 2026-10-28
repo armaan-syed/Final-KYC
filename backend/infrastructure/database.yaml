@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Private PostgreSQL data store — managed credentials and shared private networking keep database access controlled.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@v3
+  "com.aws.cloudformation.Context":
+    arch: RDS PostgreSQL in Person A's private subnets; RDS-managed credentials -> backend/worker via secret ARN
+    must:
+      - PubliclyAccessible=false; only reviewed private subnets
+      - TCP 5432 ingress limited to approved application security groups
+      - retain database across stack deletion/replacement; explicit data cleanup only
+    ref:
+      - at: ../README.md
+        has: database sequencing and integration prerequisites
+        scope: provisioning
+      - at: ../IMPLEMENTATION_HANDOFF.md
+        has: current blockers, shared ownership, and validation state
+        scope: coordination
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two private subnets in different Availability Zones from Person A's network stack
+
+  DatabaseSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Person A-provided database security group; ingress must allow TCP 5432 only from the backend/worker security groups
+
+  DatabaseName:
+    Type: String
+    Default: pramana_kyc
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9_]{0,62}$"
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    Description: Change after reviewing expected workload and AWS pricing
+
+  AllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 1000
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, prod]
+
+Resources:
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Keeps the database ENIs in the shared foundation's two private AZs.
+        must:
+          - Use only the approved private subnets from Person A.
+          - Do not create or modify shared VPC networking in this component.
+        mutable: change-with-constraints
+    Properties:
+      DBSubnetGroupDescription: !Sub Private subnets for Pramana ${Environment} PostgreSQL
+      SubnetIds: !Ref PrivateSubnetIds
+      Tags:
+        - Key: Project
+          Value: pramana-kyc
+        - Key: Environment
+          Value: !Ref Environment
+
+  KycDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Encrypted PostgreSQL store for KYC records; dev uses a single AZ and the account's Free Plan backup-retention limit.
+        must:
+          - Keep the instance private and storage encrypted.
+          - Keep master credentials RDS-managed in Secrets Manager.
+          - Permit database ingress only through the reviewed database security group.
+          - Keep dev backups at the account Free Plan's one-day limit and avoid unreviewed storage autoscaling.
+        mutable: change-with-constraints
+    Properties:
+      DBInstanceIdentifier: !Sub "${AWS::StackName}-db"
+      Engine: postgres
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref AllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: !Ref DatabaseName
+      MasterUsername: pramana_app
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroupId
+      PubliclyAccessible: false
+      MultiAZ: !If [IsProduction, true, false]
+      BackupRetentionPeriod: 1
+      DeletionProtection: !If [IsProduction, true, false]
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+      Tags:
+        - Key: Project
+          Value: pramana-kyc
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  DatabaseEndpoint:
+    Description: Private PostgreSQL endpoint; pass to the backend and worker components
+    Value: !GetAtt KycDatabase.Endpoint.Address
+
+  DatabasePort:
+    Value: !GetAtt KycDatabase.Endpoint.Port
+
+  DatabaseName:
+    Value: !Ref DatabaseName
+
+  DatabaseSecretArn:
+    Description: RDS-managed Secrets Manager secret ARN; do not publish its value
+    Value: !GetAtt KycDatabase.MasterUserSecret.SecretArn
+
+  DatabaseSecurityGroupId:
+    Value: !Ref DatabaseSecurityGroupId

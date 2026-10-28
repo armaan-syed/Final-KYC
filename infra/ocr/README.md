@@ -1,48 +1,43 @@
-# OCR runtime proof of concept
+# OCR Lambda worker
 
-This is Person A's first implementation stage: verify that Python 3.12 on
-Amazon Linux 2023, OpenCV image handling, PDF rendering, and Tesseract run
-together before wiring the worker to Person B's database schema. Python 3.12
-is selected for this OCR worker because its native Tesseract layer can use the
-active Amazon Linux 2023 build path; Person B's backend remains on its assigned
-Python runtime.
+Person A's OCR component uses Python 3.12 on Amazon Linux 2023 x86_64. The Lambda layer contains Tesseract, English/Hindi language data, OpenCV, PDFium, and the native libraries required by the OCR pipeline. The worker accepts JPEG, PNG, and PDF objects from the private S3 bucket, extracts Aadhaar/PAN fields, normalizes and compares the required fields, writes its result transactionally to Person B's PostgreSQL schema, and reports failed SQS records for retry.
 
-## Local checks
-
-The pure parser and verification checks require only Python's standard library:
+## Local tests
 
 ```bash
-PYTHONPATH=infra/ocr/src python3 -m unittest discover -s infra/ocr/tests -v
+PYTHONPATH=infra/ocr/src:infra/shared/python \
+  python3 -m unittest discover -s infra/ocr/tests -v
 ```
 
-To create synthetic, non-personal PNG fixtures and run actual OCR, build the
-Lambda-compatible layer using Docker, then run:
+This covers parser/normalization, queue contract validation, worker behavior, database transaction/idempotency logic, and notification behavior. The PostgreSQL integration test is skipped unless `PRAMANA_TEST_DATABASE_URL` points to a dedicated database with Person B's Alembic migration applied:
 
 ```bash
-bash infra/ocr/scripts/build_layer.sh
+PRAMANA_TEST_DATABASE_URL='postgresql://…' \
+PYTHONPATH=infra/ocr/src:infra/shared/python \
+  python3 -m unittest discover -s infra/ocr/tests -p 'test_postgres_integration.py' -v
 ```
 
-The script uses a pinned revision of the layer build recipe, compiles the
-Tesseract binary for the Lambda runtime, adds English and Hindi trained data,
-installs Python dependencies into the layer, then runs import, language-data,
-and synthetic OCR checks in the Lambda Python 3.12 container. The POC prints
-only field names and elapsed time. It does not print OCR text, document
-identifiers, or extracted values. The fixture cards use invented names and
-identifiers and must never be used as customer examples.
+The test only uses synthetic rows and deletes them after the test. Use a disposable database.
 
-## Runtime proof status
+## Lambda-compatible build proof
 
-The source checkout currently has no Docker daemon, SAM CLI, or system
-Tesseract binary. Therefore the pure Python parsing/normalization/verification
-tests can run locally, but the native Lambda runtime and real OCR checks cannot
-be claimed complete yet. Enable Docker, then run the layer build script before
-deployment.
+Run:
 
-`pramana_ocr.pipeline.extract_document_fields` connects OCR, parsing, and
-normalization. It returns raw and normalized values in memory for a later
-schema-aware persistence adapter; callers must not log or expose those values.
+```bash
+infra/ocr/scripts/build_layer.sh
+```
 
-The production SQS handler, RDS writer, and notification adapter remain
-dependent on the unresolved message/schema/notification contracts documented
-in `implementation/PERSON_A_IMPLEMENTATION_PLAN.md`; this POC does not pretend
-those integrations have been verified.
+The script builds the pinned Tesseract/Leptonica sources for Amazon Linux 2023, downloads the RDS CA bundle, installs pinned Python dependencies inside the Python 3.12 Lambda image, and checks native libraries, language data, writable `/tmp`, imports, and combined function/layer size. It then executes both the original OCR pipeline proof and `process_job` itself using synthetic Aadhaar PNG, PAN PNG, and Aadhaar PDF inputs with fake S3/database/notification I/O. Output includes only document type, result status, match percentage, elapsed time, and package sizes; it does not print OCR text or extracted values.
+
+Latest build proof (2026-10-29): Python 3.12.15 x86_64; Tesseract 5.5.2; Leptonica 1.87.0; OpenCV 5.0.0; NumPy 2.5.4; PDFium 5.14.0; psycopg2 2.9.10. Synthetic Aadhaar PNG (0.73s), PAN PNG (0.33s), and Aadhaar PDF (0.37s) all traversed the actual worker, matched at 100%, persisted name confidence values from 95 to 96, and passed. The layer ZIP is 93,834,078 bytes; uncompressed layer contents are 250,219,932 bytes; function code plus all layers are 258,176,462 bytes against the 262,144,000-byte quota. This leaves only 3,967,538 bytes of headroom; recheck after every packaging/dependency change. Because the ZIP is over 50 MiB, stage it through S3 for deployment.
+
+## Current worker contract
+
+- Queue: standard SQS, produced only by Person B's `POST /kyc/submit` path.
+- Required fields: `kyc_attempt_id`, `kyc_case_id`, `customer_id`, `s3_bucket`, `s3_key`, and `document_type`.
+- Key: `documents/{customer_id}/{attempt_id}/{file_name}`. The worker checks the configured bucket and key shape, then verifies the saved document row before downloading.
+- Comparison: Aadhaar name/date of birth/gender; PAN name/date of birth. Identifiers and Aadhaar address are stored but not compared.
+- Persistence: extraction (including mapped Tesseract confidence from 0–100 where available), comparisons, attempt/case state, auto-decision, and audit event are committed together. A row lock prevents duplicate result writes. Notification is attempted after the commit.
+- Failure behavior: database/S3/OCR exceptions return the affected message for SQS retry and eventual DLQ routing. On the third failed receive, a valid attempt is atomically moved to `REVIEW_REQUIRED` with a `REVIEW_REQUIRED` audit event; the record remains failed so SQS can deliver it to the DLQ. If RDS is unavailable, the state write can fail and the message remains for operator investigation/redrive. A completed attempt is ignored on redelivery. Notification failure does not roll back the committed verification.
+
+The worker is disabled in the SAM template until Person B applies and verifies the RDS migration and provides a verified SES sender identity. The shared foundation and private networking are deployed; the OCR function itself is not deployed. A temporary read-only Lambda verified private-subnet connectivity to Secrets Manager, SQS, SNS, Cognito, and SES, but this does not prove the actual OCR worker/database integration. Local and mocked checks are not AWS worker integration evidence.

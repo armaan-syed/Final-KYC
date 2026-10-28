@@ -23,7 +23,7 @@ class SubmitKYCRequest(BaseModel):
     s3_key: str = Field(..., min_length=1, max_length=1024)
     document_type: str = Field(..., pattern="^(AADHAAR|PAN)$")
     file_name: str = Field(..., min_length=1, max_length=255)
-    file_size_bytes: Optional[int] = Field(None, ge=0)
+    file_size_bytes: Optional[int] = Field(None, ge=0, le=10 * 1024 * 1024)
 
 
 class FieldComparisonSummary(BaseModel):
