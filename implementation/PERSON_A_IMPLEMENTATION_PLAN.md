@@ -1,6 +1,6 @@
 # Pramāṇa — Person A Implementation Plan
 
-This is the standalone implementation plan for Person A. It follows the existing assignments in `context/person-a.md`, `context/person-b.md`, `context/person-c.md`, `context/pramana-context.md`, and `context/project.md`; it does not change ownership or add product scope.
+This is the standalone implementation plan for Person A. It follows the project context in `context/person-a.md`, `context/person-b.md`, `context/person-c.md`, `context/pramana-context.md`, and `context/project.md`. The current A/B resource ownership split is documented in [`PERSON_A_B_WORK_SPLIT.md`](PERSON_A_B_WORK_SPLIT.md) and clarifies overlapping infrastructure assignments.
 
 ## Shared instructions for all implementation agents
 
@@ -41,7 +41,7 @@ When no person can settle a contract from the current context, record the exact 
 
 ### Existing assigned responsibility
 
-Own the AWS backbone and deployment: account/IAM setup, SAM infrastructure, private document and frontend storage, VPC/RDS security, SQS/DLQ, API Gateway/CloudFront, OCR Lambda and Tesseract/OpenCV layer, Aadhaar/PAN parsing, verification, SNS/SES infrastructure, CloudWatch, and deployment. Cognito user-pool and app-client setup is owned by Person B; Person A wires B's Cognito outputs into API Gateway authorizers and the SAM deployment. Person A also coordinates the OCR worker's database and notification integration with Person B.
+Own the shared AWS foundation and OCR worker: VPC/network foundation, private document and frontend storage, SQS/DLQ and OCR Lambda/layer, CloudFront, CloudWatch, shared SAM integration, and deployment review. Person B owns Cognito, the RDS instance/database secret, backend Lambda/API resources, and notification-specific SNS/SES resources as defined in the A/B work split. Person A wires the shared components and B's outputs together and implements the worker's database/notification integration.
 
 ### Implementation objective
 
@@ -66,7 +66,7 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 #### Remaining
 
 - [ ] **Blocked on shared contracts:** settle the upload-to-queue path, attempt/object-key lifecycle, database/SQS failure boundary, status vocabulary, Cognito/API route ownership, notification ownership, canonical field names/comparison rules, and static frontend route behavior. See the shared contract table above.
-- [ ] Complete the rest of A3: VPC/private RDS and secrets, Lambda functions and execution roles, API Gateway and Person B's Cognito authorizers, exactly one agreed queue trigger, SNS/SES, and CloudWatch logs/alarms/dashboard.
+- [ ] Complete the A-owned rest of A3: VPC/network foundation, shared storage and queue resources, OCR Lambda and event mapping, CloudWatch logs/alarms/dashboard, and integration of Person B's RDS/backend/notification resources and Cognito authorizers.
 - [ ] Complete A4 worker integration: SQS validation/retries, S3 document handling, database persistence, transaction/idempotency behavior, and queue-to-database integration tests after the contracts are agreed.
 - [ ] Complete A5 notification and monitoring integrations, including DLQ/error alarms and deployed checks.
 - [ ] Complete the teammate resource/output inventory once Person B's Cognito outputs and the remaining stack resources are defined.
@@ -110,12 +110,12 @@ The template passed AWS `validate-template`; SAM CLI, `cfn-lint`, and `cfn-guard
 #### A3. Implement SAM infrastructure in dependency order
 
 1. Define parameters for region, stage, domain/origin settings, DB sizing, and sender configuration; provide safe demo defaults only where the context already defines them.
-2. Provision VPC/private subnets/security groups and PostgreSQL RDS using the documented `t3.micro` demo target where available, with `PubliclyAccessible: false`, 7-day backups, deletion protection, and a Secrets Manager credential that is manually rotated for the demo as specified. Allow database ingress from the application Lambdas only on port 5432. Ensure private-subnet Lambdas can reach the AWS services they need (S3, SQS, Secrets Manager, Cognito APIs/JWKS, logs, and notification services) through the least-cost appropriate endpoints/egress path; verify connectivity without making RDS public.
+2. Provision the VPC/private subnets, shared route/egress path, and network/security-group foundation. Person B provisions the private PostgreSQL RDS instance and its Secrets Manager credential inside this network, using the documented demo settings where available. Coordinate security-group rules so only the backend and OCR worker can reach PostgreSQL on port 5432. Verify required private-subnet service connectivity without making RDS public.
 3. Provision the private, versioned, SSE-S3 document bucket with all public access blocked and the agreed CORS origin/methods for presigned PUT. Use bucket policies/IAM roles limited to this bucket. Enable the documented document-bucket access logging to a separate private log bucket.
 4. Provision the frontend S3 bucket as private and serve it through CloudFront with OAC, consistent with Person A's detailed bucket security section and the project architecture. Do not deploy a public S3 website endpoint.
 5. Provision the standard OCR queue and DLQ with 300-second visibility timeout, 4-day main-queue retention, 14-day DLQ retention, redrive after 3 failed receives, batch size 1, and maximum worker concurrency 5. Wire only the selected enqueue path from the contract checkpoint.
-6. Consume the customer and reviewer Cognito user pools/app clients configured by Person B. Wire the matching pool issuers and client audiences into API Gateway route-level authorizers; keep only the agreed auth endpoints public.
-7. Provision the Tesseract/OpenCV layer, OCR worker Lambda, FastAPI Lambda integration point, API Gateway HTTP API, CloudFront, SNS/SES configuration, CloudWatch log groups/alarms/dashboard, and Secrets Manager values. Configure throttling to the documented 50 requests/second steady and 100 requests/second burst limits.
+6. Consume the customer and reviewer Cognito user pools/app clients configured by Person B. Wire the matching pool issuers and client audiences into the agreed API Gateway route authorizers; keep only the agreed auth endpoints public.
+7. Provision the Tesseract/OpenCV layer and OCR worker Lambda. Person B supplies the backend Lambda/API Gateway and SNS/SES resource definitions and owns the B-specific component stack; integrate those resources with the shared API, queue, and network contracts. Add the shared CloudWatch log groups/alarms/dashboard and secret references. Configure throttling to the documented 50 requests/second steady and 100 requests/second burst limits.
 8. Give each Lambda its own execution role with least-privilege access to only the resources it needs. Keep the OCR role limited to its bucket/queue/database/notification access and backend role limited to the backend's resources.
 
 **Files/modules:** SAM resource definitions, IAM policies, security-group rules, S3 bucket policies/CORS, CloudFront OAC config, queue/DLQ config, API Gateway authorizer wiring for Person B's Cognito resources, secrets/env parameter references, outputs.
@@ -139,7 +139,7 @@ The template passed AWS `validate-template`; SAM CLI, `cfn-lint`, and `cfn-guard
 
 #### A5. Integrate notifications, monitoring, and alarms
 
-- Provision SNS topic/permissions and SES sender configuration/templates appropriate to the context and current demo account state. Document SES sandbox verification requirements and the India SMS/DLT limitations noted in Person A's context.
+- Integrate Person B's SNS topic and SES sender configuration/templates with the worker and shared stack. Person B owns those notification resources and service configuration. Document SES sandbox verification requirements and the India SMS/DLT limitations noted in Person A's context.
 - Coordinate with Person B on the notification module/package interface and invocation ownership. Send the configured notification attempt for each existing event (document submitted, automated result, reviewer decision, re-upload) and deduplicate ordinary retries. Rejection SMS remains generic; detailed mismatch values remain portal-only.
 - Add the documented CloudWatch log groups, metric filters, alarms, and dashboard. Configure alarms at the stated thresholds: any DLQ message, more than 5 Lambda errors in 5 minutes, RDS CPU above 80% for 5 minutes, and more than 10 API 5xx errors in 5 minutes. CloudTrail remains optional/recommended as the source context states.
 - Ensure logs include correlation identifiers and status without full OCR text, document bytes, passwords, tokens, or full identity numbers.
@@ -148,8 +148,8 @@ The template passed AWS `validate-template`; SAM CLI, `cfn-lint`, and `cfn-guard
 
 #### A6. Deploy and hand off
 
-- Deploy the stack in dependency order with `sam deploy`; run migrations only when Person B supplies the reviewed migration and has coordinated the database run.
-- Provide Person B the DB endpoint/name/port, document bucket, queue URL and message contract, SNS/SES config, layer ARN, region, secret name/permissions, API URL, and log locations through the agreed secure channel.
+- Deploy the shared foundation in dependency order with `sam deploy`; review and approve B's component-stack change set before B provisions it. Run migrations only when Person B supplies the reviewed migration and coordinates the database run.
+- Provide Person B the VPC/subnet/security-group references, document bucket, queue URL/ARN and message contract, OCR worker/layer outputs, and region through the agreed handoff. Person B provides A the RDS endpoint/name/port/secret ARN, Cognito IDs, backend API outputs, and SNS/SES configuration.
 - Provide Person C the API URL, CloudFront URL/distribution, frontend bucket, region, and CORS origin details. Person B provides Person C the customer/reviewer public Cognito configuration.
 - Record deployed resource identifiers and verification evidence in a handoff note without publishing secrets.
 

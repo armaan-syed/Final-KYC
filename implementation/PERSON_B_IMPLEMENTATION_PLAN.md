@@ -1,6 +1,6 @@
 # Pramāṇa — Person B Implementation Plan
 
-This is the standalone implementation plan for Person B. It follows the existing assignments in `context/person-a.md`, `context/person-b.md`, `context/person-c.md`, `context/pramana-context.md`, and `context/project.md`; it does not change ownership or add product scope.
+This is the standalone implementation plan for Person B. It follows the project context in `context/person-a.md`, `context/person-b.md`, `context/person-c.md`, `context/pramana-context.md`, and `context/project.md`. The current A/B resource ownership split is documented in [`PERSON_A_B_WORK_SPLIT.md`](PERSON_A_B_WORK_SPLIT.md) and clarifies overlapping infrastructure assignments.
 
 ## Shared instructions for all implementation agents
 
@@ -39,9 +39,13 @@ When no person can settle a contract from the current context, record the exact 
 
 ## Person B
 
+The current A/B resource ownership split is documented in
+[`PERSON_A_B_WORK_SPLIT.md`](PERSON_A_B_WORK_SPLIT.md); use it to resolve
+overlapping AWS component responsibilities in this plan.
+
 ### Existing assigned responsibility
 
-Own Cognito setup and configuration (customer/reviewer user pools and app clients), FastAPI, PostgreSQL schema/models/migrations, Cognito integration, customer/KYC/reviewer API routes, presigned URL generation, case/attempt management, audit writes, SQS integration, and the notification service interface. Person B supplies the pool/client outputs and authorizer requirements to Person A, deploys the backend Lambda through Person A's SAM stack, and provides the API contract and public Cognito configuration Person C consumes.
+Own Cognito setup and configuration (customer/reviewer user pools and app clients), FastAPI, PostgreSQL schema/models/migrations, the RDS instance/database secret, Cognito integration, customer/KYC/reviewer API routes, backend Lambda/API Gateway resources, presigned URL generation, case/attempt management, audit writes, SQS producer, and SNS/SES notification resources and interface. Person B supplies pool/client and backend resource outputs to Person A, provides the API contract and public Cognito configuration Person C consumes, and coordinates the B-specific stack with Person A's shared SAM foundation and deployment review.
 
 ### Implementation objective
 
@@ -50,7 +54,7 @@ Deliver a tested API and data layer that enforces customer/reviewer authorizatio
 ### Prerequisites/dependencies
 
 - Inspect current code and docs; coordinate with Person A before fixing table names, queue behavior, notification packaging, or environment names. Cognito settings and resource setup are Person B's responsibility; coordinate the resulting resource outputs with A and C.
-- Obtain local/test database configuration and secure AWS values from Person A. Do not commit `.env` or credentials.
+- Use an isolated local/test database for migration and API tests. Obtain shared VPC, document-bucket, and queue outputs from Person A; provision the B-owned RDS/database secret and notification resources under the ownership split. Do not commit `.env` or credentials.
 - Resolve the shared contracts, especially queue trigger, statuses, auth flow, comparison fields, and notifications.
 - Provide Person C a versioned/typed API contract before the frontend consumes endpoints. Examples in `context/person-b.md` are the starting contract.
 
