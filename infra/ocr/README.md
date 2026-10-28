@@ -32,11 +32,29 @@ identifiers and must never be used as customer examples.
 
 ## Runtime proof status
 
-The source checkout currently has no Docker daemon, SAM CLI, or system
-Tesseract binary. Therefore the pure Python parsing/normalization/verification
-tests can run locally, but the native Lambda runtime and real OCR checks cannot
-be claimed complete yet. Enable Docker, then run the layer build script before
+Phase 1 was completed on 2026-10-28 with rootless Docker, using the
+`public.ecr.aws/lambda/python:3.12` x86_64 runtime container. The build uses
+Tesseract 5.5.2, Leptonica 1.87.0, `opencv-python-headless` 5.0.0.93, NumPy
+2.5.4, pytesseract 0.3.13, pypdfium2 5.14.0, Pillow 13.0.0, and packaging
+26.3. The layer contains the English and Hindi trained data; the unused OSD
+model is excluded to preserve the Lambda size budget. The build script defaults
+to PyPI and accepts `PIP_INDEX_URL` to select a package index mirror.
+
+The successful build produced a 93,751,918-byte ZIP (89.4 MiB) with
+250,045,372 bytes uncompressed (238.4 MiB). The layer is below Lambda's 250 MiB
+uncompressed limit. Its ZIP is above the 50 MB direct-upload limit, so publish
+it through S3. The function package and every attached layer share the
+uncompressed size quota, so include the eventual worker code when sizing a
 deployment.
+
+The Lambda-compatible container check confirmed Python 3.12.15/x86_64,
+OpenCV/NumPy/PDFium/pytesseract imports, Tesseract 5.5.2 startup, no missing
+Tesseract shared libraries, English/Hindi language data, and writable `/tmp`.
+The synthetic Aadhaar PNG, PAN PNG, and Aadhaar PDF each produced the expected
+normalized comparison with `AUTO_VERIFIED` at 100%. OCR elapsed times were
+0.65 s, 0.30 s, and 0.34 s respectively. The existing pure-Python suite also
+passed 12/12 tests. These checks ran locally in the Lambda runtime image; no
+AWS resources were deployed.
 
 `pramana_ocr.pipeline.extract_document_fields` connects OCR, parsing, and
 normalization. It returns raw and normalized values in memory for a later

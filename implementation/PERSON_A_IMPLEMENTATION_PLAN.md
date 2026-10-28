@@ -58,10 +58,13 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 - [x] Parsed the SAM template locally, checked resource references for dependency cycles, and passed AWS CloudFormation `validate-template` in `us-east-1`.
 - [x] Preserved Person B and Person C's existing `AdministratorAccess`; no teammate IAM users or policies were changed.
 - [x] Kept local `.env` ignored by Git and set the project region/output defaults; no credential values were committed.
+- [x] Completed the Lambda-compatible OCR proof on 2026-10-28 in the Python 3.12.15 x86_64 Lambda runtime image. Tesseract 5.5.2/Leptonica 1.87.0 started with no missing shared libraries; OpenCV 5.0.0.93, NumPy 2.5.4, pytesseract 0.3.13, PDFium 5.14.0, Pillow 13.0.0, and packaging 26.3 imported; `/tmp` was writable; English and Hindi trained data were present.
+- [x] Ran the synthetic Aadhaar PNG, PAN PNG, and Aadhaar PDF through preprocessing, Tesseract, parsing, normalization, and comparison. Each matched the expected reference at 100% and returned `AUTO_VERIFIED`; measured OCR times were 0.65 s, 0.30 s, and 0.34 s. No OCR values were printed.
+- [x] Built the final layer ZIP at 93,751,918 bytes (89.4 MiB) and 250,045,372 bytes uncompressed (238.4 MiB), below the 250 MiB Lambda quota. The ZIP exceeds the 50 MB direct-upload threshold and must be uploaded from S3. Function code plus all layers must still fit the shared 250 MiB quota.
+- [x] Re-ran the existing pure-Python suite: 12/12 passed. `bash -n`, Python bytecode compilation, and `git diff --check` passed.
 
 #### Remaining
 
-- [ ] **Blocked by the Docker daemon:** build the Lambda-compatible Tesseract/OpenCV/PDF layer and run the synthetic image/PDF OCR proof. The layer recipe exists, but the native runtime has not been verified.
 - [ ] **Blocked on shared contracts:** settle the upload-to-queue path, attempt/object-key lifecycle, database/SQS failure boundary, status vocabulary, Cognito/API route ownership, notification ownership, canonical field names/comparison rules, and static frontend route behavior. See the shared contract table above.
 - [ ] Complete the rest of A3: VPC/private RDS and secrets, Lambda functions and execution roles, API Gateway and Person B's Cognito authorizers, exactly one agreed queue trigger, SNS/SES, and CloudWatch logs/alarms/dashboard.
 - [ ] Complete A4 worker integration: SQS validation/retries, S3 document handling, database persistence, transaction/idempotency behavior, and queue-to-database integration tests after the contracts are agreed.
