@@ -10,7 +10,7 @@ Person A selected the remaining cross-person decisions at the project owner's di
 - A's `pramana-dev-foundation` is deployed in `us-east-1`; NAT is absent, OCR and CloudFront are disabled, and the free S3 gateway endpoint remains.
 - B's private RDS instance and the customer/reviewer Cognito pools and clients exist. B has not applied the Alembic migration or verified the database catalog.
 - There is no deployed backend API/Lambda, OCR worker, verified SES sender, or CloudFront distribution. B has not supplied an API deployment change set for review.
-- A's egress-only IPv6 path is deployed and was verified by a read-only Lambda probe from the private subnets to Secrets Manager, SQS, SNS, Cognito, and SES. The probe function is absent; its CloudFormation stack remains `DELETE_IN_PROGRESS` with the IAM role present despite a repeated delete request.
+- A's egress-only IPv6 path is deployed and was verified by a read-only Lambda probe from the private subnets to Secrets Manager, SQS, SNS, Cognito, and SES. AWS has now fully deleted the probe stack, function, and IAM role.
 - A reviewed B's authorization boundary and changed the local implementation to validate Cognito access tokens at FastAPI. This review and network path address the A-owned blockers B reported; B can proceed with migration and API deployment preparation.
 
 ## Ownership

@@ -12,7 +12,7 @@
 
 ## A-owned blockers reported by B: resolved
 
-- Person A deployed outbound-only IPv6 egress through an egress-only Internet Gateway, without NAT or interface endpoints. A read-only Lambda in the same private subnets passed service API checks for Secrets Manager, SQS, SNS, both Cognito pools, and SES. SQS/SNS/SES checks used dual-stack endpoints. The Lambda is now absent, but its temporary stack remains `DELETE_IN_PROGRESS` with the IAM role present; a repeated delete request did not finish cleanup.
+- Person A deployed outbound-only IPv6 egress through an egress-only Internet Gateway, without NAT or interface endpoints. A read-only Lambda in the same private subnets passed service API checks for Secrets Manager, SQS, SNS, both Cognito pools, and SES. SQS/SNS/SES checks used dual-stack endpoints. AWS has now deleted the temporary probe stack, Lambda, and IAM role.
 - Person A reviewed the API authorization boundary and fixed FastAPI token validation to accept signed Cognito **access tokens**, validating signature, issuer, expiry, `token_use=access`, and app-client `client_id` for the selected customer/reviewer pool. FastAPI applies role guards; API Gateway stays a proxy with no second authorizer.
 - A pulled B's `cdfeedf` commit on `master` before restoring A's work. The updated source/tests/docs will be committed and pushed to the same branch for B to pull.
 
