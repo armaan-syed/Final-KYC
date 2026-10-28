@@ -12,12 +12,14 @@ clarifies and redistributes overlapping A/B assignments; it does not change
 Person C's work or any teammate's AWS access. Use this as the working A/B
 ownership split, and confirm the stack boundary together before provisioning.
 
-As of 2026-10-29, no AWS resources have been deployed. The source now defines
-the shared VPC, private network, buckets, CloudFront OAC, standard OCR queue and
-DLQ, conditional OCR worker/layers, alarms, and dashboard. The worker remains
-disabled by default until Person B supplies its database secret and SES sender
-identity. Use infrastructure as code and integrate each component once; do not
-create duplicate resources manually.
+As of 2026-10-29, the shared foundation has a reviewed, unexecuted CloudFormation
+change set. No application-stack resources have been deployed. SAM has created
+its managed artifact bucket and uploaded artifacts for the review-only change
+set. The source defines the shared VPC, private network, buckets, CloudFront
+OAC, standard OCR queue and DLQ, conditional OCR worker/layers, alarms, and
+dashboard. The worker remains disabled by default until Person B supplies its
+database secret and SES sender identity. Use infrastructure as code and
+integrate each component once; do not create duplicate resources manually.
 
 ## Ownership
 
@@ -74,7 +76,15 @@ The following A/B contract is implemented and locally tested in code. Person B s
 6. **Notifications:** worker auto-verification uses the shared notification module to send generic SMS directly to the customer phone and SES email after commit. B's reviewer-decision path sends its existing notifications. The proposed B customer SNS topic is not used by current code; submit/re-upload notification ownership remains open. Provider delivery is best-effort and cannot be atomic with the DB transaction.
 7. **Authentication:** B's FastAPI validates Cognito JWTs. Pool/client outputs and API Gateway authorizer configuration are not present. A's root SAM does not currently wire authorizers into B's separate REST API; settle this boundary with B when pools/API design are available.
 
-No S3, queue, database, Cognito, notification, or Lambda resource is deployed. Person B and Person C's existing AWS administrator access remains unchanged.
+No application S3, queue, database, Cognito, notification, or Lambda resources
+are deployed from the project stack. The SAM deployment artifact bucket exists
+outside that stack and holds staged artifacts. The review-only foundation change
+set is `AVAILABLE` but unexecuted; it proposes 35 additions and no replacements
+or deletions, with `EnableOCRWorker=false`. Its NAT gateway plus public IPv4
+address would cost about `$36.50` per 730-hour month before data processing or
+other usage. See the [Person A plan](PERSON_A_IMPLEMENTATION_PLAN.md#aws-review-only-foundation-change-set-2026-10-29)
+for the change set ARN, resource scope, and review details. Person B and Person
+C's existing AWS administrator access remains unchanged.
 
 ## Completion checkpoints
 

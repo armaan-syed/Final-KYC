@@ -12,8 +12,8 @@ The work is split into three standalone plans, one for each existing assignment.
 
 - [Final project integration and end-to-end verification](FINAL_PROJECT_INTEGRATION.md)
 
-## Person A execution note — 2026-10-28
+## Person A execution note — 2026-10-29
 
 Person A confirms Person B and Person C are 100% trusted teammates. Their existing AWS `AdministratorAccess` must remain unchanged during Person A's implementation. Person A will remove their access manually after the implementation; do not modify either teammate's AWS access as part of this work.
 
-See the [Person A execution checklist](PERSON_A_IMPLEMENTATION_PLAN.md#person-a-execution-status) for completed work and remaining tasks. The local OCR code and 12 Python tests are complete; the initial SAM foundation passes CloudFormation `validate-template` in `us-east-1`. Native OCR runtime validation is blocked by the unavailable Docker daemon, and the remaining infrastructure and worker integration depend on open shared contracts. No AWS resources have been deployed, and Person B/C access has not been changed.
+See the [Person A execution checklist](PERSON_A_IMPLEMENTATION_PLAN.md#person-a-execution-status) for completed work and remaining tasks. Person B's latest commit and Person A's work are pushed to `origin/master` at `960de6f`. Current local runs passed 16 backend tests and 28 OCR/worker tests; one PostgreSQL integration test skipped because no dedicated test database URL is configured (a prior disposable migrated-PostgreSQL integration run passed). Root, backend, and Person B's RDS templates pass AWS CloudFormation `validate-template`; the foundation change set is reviewed and available but unexecuted. No project workload resources are deployed. SAM's artifact bucket and staged deployment objects exist. Person B/C access has not been changed.

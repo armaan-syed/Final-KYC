@@ -7,9 +7,10 @@ Use this after and during the individual Person A, B, and C plans. It coordinate
 ## Current integration snapshot — 2026-10-29
 
 - The A/B queue, status, key, notification, and persistence interfaces have a locally tested baseline recorded in `PERSON_A_B_WORK_SPLIT.md`; Person B still needs to confirm the recovery and notification choices.
-- OCR/worker tests: 29 passed, including one disposable PostgreSQL integration test. Backend contract tests: 4 passed. Both SAM templates parse as YAML, their local `Ref`/`GetAtt`/`Sub` names resolve, and `cfn-lint` passes with the documented W1030 exclusion.
+- Current local test run: backend suite 16 passed; OCR/worker suite 28 passed and 1 PostgreSQL integration test skipped because no dedicated test database URL is configured. A prior run against a disposable migrated PostgreSQL database passed. Both SAM templates parse, their local `Ref`/`GetAtt`/`Sub` names resolve, and `cfn-lint` passes with the documented W1030 exclusion.
 - The updated layer and actual worker proof passed inside the Python 3.12 x86_64 Lambda image for synthetic Aadhaar PNG, PAN PNG, and Aadhaar PDF. All auto-verified at 100%; measured combined function/layer size is 258,176,462 bytes of the 262,144,000-byte quota, leaving about 3.8 MiB headroom. The 93,834,078-byte layer ZIP must be staged through S3.
-- The current SAM templates pass `cfn-lint` (W1030 excluded for ARN values passed through string parameters), but SAM CLI and AWS CloudFormation validation remain pending. No AWS resources are deployed, and no usable non-root AWS credentials are available in this environment.
+- Root and backend templates pass SAM validation/build and AWS CloudFormation `validate-template`; Person B's RDS template passes `cfn-lint` and AWS `validate-template`. A non-root IAM identity was used in `us-east-1`. The shared foundation change set has 35 additions, no replacements/deletions, and is `AVAILABLE` but unexecuted; OCR is disabled in it. No project workload resources are deployed. SAM's managed artifact bucket and uploaded packages exist so the reviewed change set can be executed. See `PERSON_A_IMPLEMENTATION_PLAN.md` for the change set ARN and cost review.
+- CloudFormation compliance validation with `cfn-guard` has not run: neither the CLI nor Python binding nor rules file is available. Resolve this validator prerequisite before executing the change set.
 - Person B's Cognito IDs, RDS endpoint/secret ARN, SES identity, and stack outputs are not available yet. Do not claim the deployed workflow is integrated.
 
 

@@ -23,17 +23,26 @@
 
 ## Explicitly not deployed / still needs coordination
 
-- No AWS resource was created or changed. RDS deployment needs Person A's
-  reviewed VPC/private subnet IDs and database security-group reference, plus
-  the approved stack change set. The template default `db.t4g.micro` is a
-  non-zero-cost choice and must be accepted before deployment.
-- Read-only inspection in `us-east-1` found no active CloudFormation stacks or
-  RDS instances; the only VPC is the default VPC, whose route table has an
-  Internet Gateway default route. It is not the reviewed private network this
-  database is supposed to use.
-- Person A's private Lambda subnets also need approved egress (NAT and/or VPC
-  endpoints) for the backend's AWS service calls and Cognito JWKS retrieval;
-  RDS reachability alone is not sufficient.
+- No project workload resources are provisioned. Person A has a reviewed
+  CloudFormation change set for `pramana-dev-foundation` in `us-east-1`; it is
+  `AVAILABLE` but unexecuted. It proposes two private subnets in distinct AZs,
+  a database security group, and one NAT gateway for private egress. The change
+  set has Person A's explicit approval, but its concrete VPC, subnet, and
+  security-group IDs are not available until execution. Execution is currently
+  paused because the CloudFormation compliance validator is unavailable. SAM's
+  separate managed artifact bucket holds the staged template/layer packages.
+- Read-only inspection found only the default VPC and no RDS instance. The
+  proposed new private network is not active until its change set is executed.
+  The RDS template inputs (`PrivateSubnetIds`, `DatabaseSecurityGroupId`) match
+  Person A's planned outputs and pass AWS CloudFormation `validate-template`
+  plus `cfn-lint`. The default `db.t4g.micro` incurs charges; RDS needs its own
+  reviewed change set and cost approval. The database's Retain policies mean a
+  later stack deletion would leave the database and its charges in place.
+- The proposed single NAT gateway provides outbound access for backend AWS
+  service calls and Cognito JWKS retrieval. It has ongoing hourly, public IPv4,
+  and data-processing charges; both private AZs route through that single-AZ
+  gateway. RDS reachability alone is not sufficient, so the egress design must
+  be accepted with the foundation change set.
 - The API/worker notification contract is unresolved: direct-to-phone SMS in
   the current service versus publishing through an SNS topic, and which
   component sends automated-result notifications. Do not integrate the worker
@@ -46,6 +55,9 @@
 - Notification audit records distinguish provider acceptance from final
   delivery. The external-provider/database crash window remains non-atomic;
   this does not claim exactly-once delivery.
-- `sam` is not installed in this workspace, and no PostgreSQL test server is
-  available. SAM/CloudFormation validation, migration execution, and AWS
-  integration remain unverified.
+- SAM is available in the project virtual environment, and local SAM/template
+  validation plus AWS `validate-template` have passed. No RDS migration has
+  been applied to AWS; deployed SAM/API and database integration remain
+  unverified. The latest test run skipped the PostgreSQL integration check
+  because no dedicated database URL was configured; an earlier disposable
+  migrated-PostgreSQL integration run passed.
