@@ -12,14 +12,15 @@ clarifies and redistributes overlapping A/B assignments; it does not change
 Person C's work or any teammate's AWS access. Use this as the working A/B
 ownership split, and confirm the stack boundary together before provisioning.
 
-As of 2026-10-29, the shared foundation has a reviewed, unexecuted CloudFormation
-change set. No application-stack resources have been deployed. SAM has created
-its managed artifact bucket and uploaded artifacts for the review-only change
-set. The source defines the shared VPC, private network, buckets, CloudFront
-OAC, standard OCR queue and DLQ, conditional OCR worker/layers, alarms, and
-dashboard. The worker remains disabled by default until Person B supplies its
-database secret and SES sender identity. Use infrastructure as code and
-integrate each component once; do not create duplicate resources manually.
+As of 2026-10-29, the A-owned foundation stack is deployed in `us-east-1`.
+Person B can use its VPC, two private subnets, and security-group IDs below to
+provision private RDS now. NAT and public routing have been removed at Person A's
+instruction. The stack retains the private S3 buckets, S3 gateway endpoint,
+standard OCR queue/DLQ, alarms, dashboard, and shared layer. CloudFront and the
+OCR worker remain disabled. Private Lambdas will need approved interface VPC
+endpoints before their AWS SDK calls can work; no NAT or interface endpoints are
+currently deployed. Use infrastructure as code and do not create duplicate
+resources manually.
 
 ## Ownership
 
@@ -38,13 +39,25 @@ integrate each component once; do not create duplicate resources manually.
 
 ### Person A provides to Person B
 
-- VPC ID, private subnet IDs, and the agreed security-group references once the
-  network foundation is defined.
-- Document bucket name and required access contract.
-- Standard OCR queue URL/ARN and the agreed SQS message schema.
+- VPC: `vpc-0f16fa3dea85f7b0d`.
+- Private subnet A: `subnet-0e45971a48d73a18a` (`us-east-1a`); subnet B:
+  `subnet-03c8032601117f445` (`us-east-1b`).
+- Database security group: `sg-02235e74a0e910c37`; PostgreSQL ingress on 5432
+  is limited to the backend SG `sg-02823dd2442632bed` and worker SG
+  `sg-0751ba5b887acb41c`.
+- Document bucket: `pramana-dev-foundation-documentbucket-r77xgfetn3cj`.
+- Standard OCR queue URL:
+  `https://sqs.us-east-1.amazonaws.com/682197558335/pramana-dev-foundation-OCRQueue-LrTO9SM80mE2`;
+  ARN: `arn:aws:sqs:us-east-1:682197558335:pramana-dev-foundation-OCRQueue-LrTO9SM80mE2`.
+- Standard queue message schema and one-producer rule remain as described below.
 - AWS region: `us-east-1`.
 - The reviewed integration/deployment path for B's backend, database, and
   notification resource definitions.
+
+Person B can create the private RDS subnet group and RDS security-group
+attachment from these outputs. Do not expect backend/worker AWS API calls from
+the private subnets to work until the team chooses and deploys interface
+endpoints (or later approves another egress path).
 
 ### Person B provides to Person A and Person C
 
@@ -58,11 +71,12 @@ integrate each component once; do not create duplicate resources manually.
   interface used by both the API and worker.
 - Reviewed Alembic migrations, schema/status/message contract, and test evidence.
 
-Resource identifiers and secret values are not available until the relevant
-resources are created. Share secret values only through the agreed secure
-mechanism; provide secret ARNs and non-secret connection metadata in handoff
-notes. Use coordinated SAM/CloudFormation stacks or nested templates; do not
-create parallel console-managed copies of resources already defined in code.
+Person A's network, bucket, and queue identifiers are now available above.
+Person B's RDS endpoint, Cognito outputs, and notification identities remain
+pending. Share secret values only through the agreed secure mechanism; provide
+secret ARNs and non-secret connection metadata in handoff notes. Use coordinated
+SAM/CloudFormation stacks or nested templates; do not create parallel
+console-managed copies of resources already defined in code.
 
 ## Shared contract implementation baseline
 
@@ -76,15 +90,14 @@ The following A/B contract is implemented and locally tested in code. Person B s
 6. **Notifications:** worker auto-verification uses the shared notification module to send generic SMS directly to the customer phone and SES email after commit. B's reviewer-decision path sends its existing notifications. The proposed B customer SNS topic is not used by current code; submit/re-upload notification ownership remains open. Provider delivery is best-effort and cannot be atomic with the DB transaction.
 7. **Authentication:** B's FastAPI validates Cognito JWTs. Pool/client outputs and API Gateway authorizer configuration are not present. A's root SAM does not currently wire authorizers into B's separate REST API; settle this boundary with B when pools/API design are available.
 
-No application S3, queue, database, Cognito, notification, or Lambda resources
-are deployed from the project stack. The SAM deployment artifact bucket exists
-outside that stack and holds staged artifacts. The review-only foundation change
-set is `AVAILABLE` but unexecuted; it proposes 35 additions and no replacements
-or deletions, with `EnableOCRWorker=false`. Its NAT gateway plus public IPv4
-address would cost about `$36.50` per 730-hour month before data processing or
-other usage. See the [Person A plan](PERSON_A_IMPLEMENTATION_PLAN.md#aws-review-only-foundation-change-set-2026-10-29)
-for the change set ARN, resource scope, and review details. Person B and Person
-C's existing AWS administrator access remains unchanged.
+The shared foundation stack is deployed, but it contains no RDS, Cognito,
+backend API/Lambda, OCR worker, customer-notification SNS, SES identity, or
+CloudFront distribution. Its no-NAT CloudFormation update has removed the NAT
+gateway, public IPv4, and public routes; the stack keeps the private network IDs
+above. Person B and Person C's existing AWS administrator access remains
+unchanged. See the [Person A plan](PERSON_A_IMPLEMENTATION_PLAN.md#aws-foundation-deployment-and-no-nat-update-2026-10-29)
+for verified resource outputs, endpoint requirements, costs, and the update
+change-set ARN.
 
 ## Completion checkpoints
 

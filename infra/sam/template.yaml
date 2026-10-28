@@ -1,19 +1,20 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Pramana shared network, storage, and OCR processing foundation — keeps RDS
-  private and runs one idempotent worker from the standard SQS queue.
+  Pramana shared private network and processing foundation — keeps public egress
+  disabled by default and uses private AWS service endpoints where configured.
 
 Metadata:
   AWSToolsMetrics:
     AWSAgentToolkit: aws-cloudformation@3
   com.aws.cloudformation.Context:
-    arch: Private VPC/RDS -> Lambda; standard SQS -> OCR Lambda; private S3 -> CloudFront OAC
+    arch: Private VPC/RDS -> Lambda; standard SQS -> OCR Lambda; private S3 -> CloudFront OAC when enabled; no NAT by default
     must:
       - Only POST /kyc/submit enqueues OCR; do not add an S3 event trigger
       - Keep the RDS database in private subnets; allow PostgreSQL ingress only from the two Lambda security groups
       - Document bucket blocks public access and requires TLS; OCR reads only documents/*
       - Person B and Person C administrator access stays unchanged until Person A removes it manually
-      - Do not deploy this foundation until account-specific cost review and user approval
+      - Keep NAT disabled by default; review cost and runtime need before enabling public egress
+      - Add required private AWS service endpoints before enabling VPC Lambdas that call AWS APIs
     ref:
       - at: infra/README.md
         has: SAM resources, private network egress, build steps, deployment gate, and open contracts
@@ -40,6 +41,21 @@ Parameters:
     Default: 'false'
     AllowedValues: ['true', 'false']
     Description: Enable after Person B's database secret and SES identity are ready.
+  EnableNatGateway:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable only when a runtime dependency requires public internet egress and the cost is approved.
+  EnableCloudFront:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable after AWS account verification permits CloudFront distribution creation.
+  FrontendAllowedOrigin:
+    Type: String
+    Default: http://localhost:3000
+    AllowedPattern: '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$'
+    Description: Browser origin allowed to upload documents while CloudFront is disabled.
   DatabaseSecretArn:
     Type: String
     Default: ''
@@ -84,6 +100,8 @@ Rules:
 
 Conditions:
   OCRWorkerEnabled: !Equals [!Ref EnableOCRWorker, 'true']
+  NatGatewayEnabled: !Equals [!Ref EnableNatGateway, 'true']
+  DeployCloudFront: !Equals [!Ref EnableCloudFront, 'true']
   HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, '']]
   HasRDSIdentifier: !Not [!Equals [!Ref RDSInstanceIdentifier, '']]
   HasBackendApiName: !Not [!Equals [!Ref BackendApiName, '']]
@@ -111,6 +129,7 @@ Resources:
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
+    Condition: NatGatewayEnabled
     Metadata:
       com.aws.cloudformation.Context:
         why: Provides controlled outbound egress through the NAT gateway; no application resource is placed in the public subnet.
@@ -124,12 +143,14 @@ Resources:
 
   VPCGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
+    Condition: NatGatewayEnabled
     Properties:
       VpcId: !Ref ProjectVPC
       InternetGatewayId: !Ref InternetGateway
 
   PublicSubnet:
     Type: AWS::EC2::Subnet
+    Condition: NatGatewayEnabled
     Metadata:
       com.aws.cloudformation.Context:
         why: Hosts only the NAT gateway used for outbound service calls from private Lambda subnets.
@@ -181,11 +202,21 @@ Resources:
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
+    Condition: NatGatewayEnabled
     Properties:
       VpcId: !Ref ProjectVPC
 
   PublicDefaultRoute:
     Type: AWS::EC2::Route
+    Condition: NatGatewayEnabled
+    Metadata:
+      guard:
+        SuppressedRules:
+          - NO_UNRESTRICTED_ROUTE_TO_IGW
+      com.aws.cloudformation.Context:
+        why: Gives the public subnet that hosts only the NAT gateway its required internet route; private subnets route through NAT instead.
+        must:
+          - Keep application and database workloads out of the public subnet.
     DependsOn: VPCGatewayAttachment
     Properties:
       RouteTableId: !Ref PublicRouteTable
@@ -194,17 +225,20 @@ Resources:
 
   PublicSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: NatGatewayEnabled
     Properties:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref PublicRouteTable
 
   NatEIP:
     Type: AWS::EC2::EIP
+    Condition: NatGatewayEnabled
     Properties:
       Domain: vpc
 
   NatGateway:
     Type: AWS::EC2::NatGateway
+    Condition: NatGatewayEnabled
     Metadata:
       com.aws.cloudformation.Context:
         why: Single-AZ NAT keeps SES API, Cognito JWKS, and AWS SDK calls reachable without public Lambda addresses; this is a cost-sensitive demo tradeoff, not multi-AZ egress.
@@ -231,6 +265,7 @@ Resources:
 
   PrivateDefaultRouteA:
     Type: AWS::EC2::Route
+    Condition: NatGatewayEnabled
     Properties:
       RouteTableId: !Ref PrivateRouteTableA
       DestinationCidrBlock: 0.0.0.0/0
@@ -238,6 +273,7 @@ Resources:
 
   PrivateDefaultRouteB:
     Type: AWS::EC2::Route
+    Condition: NatGatewayEnabled
     Properties:
       RouteTableId: !Ref PrivateRouteTableB
       DestinationCidrBlock: 0.0.0.0/0
@@ -351,6 +387,14 @@ Resources:
 
   DocumentAccessLogsBucket:
     Type: AWS::S3::Bucket
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED
+      com.aws.cloudformation.Context:
+        why: Receives server access logs from the document bucket; this terminal log sink cannot also be its own logging destination.
+        must:
+          - Keep the log bucket private and encrypted.
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
@@ -385,7 +429,10 @@ Resources:
             AllowedMethods:
               - PUT
             AllowedOrigins:
-              - !Sub 'https://${FrontendDistribution.DomainName}'
+              - !If
+                - DeployCloudFront
+                - !Sub 'https://${FrontendDistribution.DomainName}'
+                - !Ref FrontendAllowedOrigin
             MaxAge: 3600
       LoggingConfiguration:
         DestinationBucketName: !Ref DocumentAccessLogsBucket
@@ -403,6 +450,14 @@ Resources:
 
   DocumentBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_SSL_REQUESTS_ONLY
+      com.aws.cloudformation.Context:
+        why: Denies non-TLS requests on this bucket's exact bucket and object ARNs; the registry rule only recognizes Resource '*'.
+        must:
+          - Preserve the scoped aws:SecureTransport deny.
     Properties:
       Bucket: !Ref DocumentBucket
       PolicyDocument:
@@ -421,6 +476,14 @@ Resources:
 
   DocumentAccessLogsBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_SSL_REQUESTS_ONLY
+      com.aws.cloudformation.Context:
+        why: Denies non-TLS requests on this bucket's exact bucket and object ARNs; the registry rule only recognizes Resource '*'.
+        must:
+          - Preserve the scoped aws:SecureTransport deny.
     Properties:
       Bucket: !Ref DocumentAccessLogsBucket
       PolicyDocument:
@@ -450,6 +513,14 @@ Resources:
 
   FrontendBucket:
     Type: AWS::S3::Bucket
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_LOGGING_ENABLED
+      com.aws.cloudformation.Context:
+        why: Private static assets are served through CloudFront OAC; server access logging is reserved for the sensitive KYC document bucket to avoid duplicate static-asset logs.
+        must:
+          - Keep versioning, encryption, and all public-access blocks enabled.
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
@@ -465,9 +536,12 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
 
   FrontendOriginAccessControl:
     Type: AWS::CloudFront::OriginAccessControl
+    Condition: DeployCloudFront
     Properties:
       OriginAccessControlConfig:
         Name: !Sub '${ProjectName}-${Environment}-frontend'
@@ -477,6 +551,7 @@ Resources:
 
   FrontendDistribution:
     Type: AWS::CloudFront::Distribution
+    Condition: DeployCloudFront
     Properties:
       DistributionConfig:
         Comment: !Sub '${ProjectName}-${Environment} static frontend'
@@ -516,6 +591,15 @@ Resources:
 
   FrontendBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    Condition: DeployCloudFront
+    Metadata:
+      guard:
+        SuppressedRules:
+          - S3_BUCKET_SSL_REQUESTS_ONLY
+      com.aws.cloudformation.Context:
+        why: Denies non-TLS requests on this bucket's exact bucket and object ARNs; the registry rule only recognizes Resource '*'.
+        must:
+          - Preserve the scoped aws:SecureTransport deny and CloudFront OAC read-only access.
     Properties:
       Bucket: !Ref FrontendBucket
       PolicyDocument:
@@ -908,12 +992,14 @@ Outputs:
     Description: ARN of the private KYC document bucket.
     Value: !GetAtt DocumentBucket.Arn
   FrontendBucketName:
-    Description: Private S3 bucket served only through the CloudFront distribution.
+    Description: Private S3 bucket for frontend assets; CloudFront remains optional until account verification.
     Value: !Ref FrontendBucket
   FrontendDistributionId:
+    Condition: DeployCloudFront
     Description: CloudFront distribution ID for frontend deployment invalidations.
     Value: !Ref FrontendDistribution
   FrontendDistributionDomainName:
+    Condition: DeployCloudFront
     Description: CloudFront URL for the static frontend.
     Value: !GetAtt FrontendDistribution.DomainName
   OCRQueueUrl:
