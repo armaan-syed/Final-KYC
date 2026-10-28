@@ -6,7 +6,7 @@ Use this after and during the individual Person A, B, and C plans. It coordinate
 
 ### Integration sequence
 
-1. **Baseline and contract checkpoint:** all three agents inspect the same branch, review the context docs, record current code/test state, and resolve the listed cross-person contract items.
+1. **Baseline and contract checkpoint:** all three agents inspect the same branch, review the context docs, record current code/test state, and resolve the shared contract table in the individual plans, including attempt-ID allocation, DB/SQS recovery, status vocabulary, public auth routes, and static routing.
 2. **Person A foundation:** complete the Tesseract/OpenCV POC and deploy foundational infrastructure outputs; keep database private and document bucket private.
 3. **Person B data/API foundation:** create and test migration/models against a local PostgreSQL instance; share the API, status and queue schemas with A and C.
 4. **A/B worker integration:** run the OCR worker against B's schema and fixtures; verify each status/write/decision/audit event.
@@ -25,7 +25,7 @@ Use this after and during the individual Person A, B, and C plans. It coordinate
 | Document flow | Obtain a URL from B, upload directly from C to A's private bucket, submit metadata, and confirm exactly one message and matching S3 key/attempt ID reach A's worker. Verify rejected origins/content types/expired URLs fail safely. |
 | OCR/verification | Test sanitized Aadhaar and PAN success/mismatch cases, normalization, required-field behavior, full-match decision, reviewer queue state, and no data leakage in logs. |
 | Reviewer flow | Load queue/detail through C, view short-lived document URL, submit each allowed decision through B, confirm state/audit/notifications, and verify re-upload preserves the earlier attempt. |
-| Notifications | Confirm one SMS/email per defined transition, correct generic rejection copy, correct destinations/sandbox behavior, no sensitive values in SMS, and safe handling of provider failures. |
+| Notifications | Confirm notifications follow the defined transition ownership, generic rejection copy, destinations/sandbox behavior, and no sensitive values in SMS. Verify ordinary retry deduplication and document the unavoidable provider/database delivery ambiguity rather than claiming strict exactly-once delivery. |
 | Deployment/config | Compare SAM outputs and Lambda settings with B/C env examples; verify frontend CORS origin, CloudFront routes, Lambda permissions, RDS private access, and absence of committed secrets. |
 | Operations | Verify CloudWatch log groups, dashboard, DLQ alarm, Lambda error alarm, RDS CPU alarm and API 5xx alarm using safe test signals where practical. |
 
@@ -34,16 +34,17 @@ Use this after and during the individual Person A, B, and C plans. It coordinate
 Run these against local services/mocks first, then against a deployed test stack using synthetic records and non-sensitive fixtures:
 
 1. **New customer, successful Aadhaar:** register → confirm → sign in → get presigned URL → direct upload → submit → one queue job → OCR/parser → all required fields match → `AUTO_VERIFIED` → status appears in customer portal → one notification and system audit/decision are stored.
-2. **New customer, mismatch:** upload PAN or Aadhaar with one deliberate field mismatch → result enters the agreed review status → reviewer sees exact field values and mismatch → approve or reject → case/attempt/decision/audit update → customer status and allowed notification update.
-3. **Unreadable document and re-upload:** OCR cannot produce reliable required fields → reviewer requests re-upload → original attempt remains unchanged and visible → customer submits a new attempt → processing and result update the current case.
-4. **Authorization:** no token cannot access protected APIs; customer cannot access reviewer APIs or another customer's record; reviewer cannot use customer identity to access customer-only routes; invalid, expired, wrong-pool and wrong-role tokens are rejected.
-5. **Failure behavior:** invalid file type/content type, expired presigned URL, S3 PUT error, backend submit failure, duplicate submit, malformed SQS payload, OCR/parser failure, DB unavailable, SQS retry/DLQ, notification provider error, expired preview URL, and API 4xx/5xx all produce recoverable and non-misleading behavior.
-6. **Frontend deployment:** customer and reviewer routes work on the CloudFront domain after direct navigation/refresh; static assets load; CORS and authorization work; processing polling stops at the correct state.
+2. **New customer, successful PAN:** upload a PAN document whose name and DOB match → PAN identifier is stored but not compared → `AUTO_VERIFIED` → customer status and notification update.
+3. **New customer, mismatch:** upload PAN or Aadhaar with one deliberate field mismatch → result enters the agreed review status → reviewer sees exact field values and mismatch → approve or reject → case/attempt/decision/audit update → customer status and allowed notification update.
+4. **Unreadable document and re-upload:** OCR cannot produce reliable required fields → reviewer requests re-upload → original attempt remains unchanged and visible → customer submits a new attempt → processing and result update the current case.
+5. **Authorization:** no token cannot access protected APIs; customer cannot access reviewer APIs or another customer's record; reviewer cannot use customer identity to access customer-only routes; invalid, expired, wrong-pool and wrong-role tokens are rejected.
+6. **Failure behavior:** invalid file type/content type, expired presigned URL, S3 PUT error, backend submit failure, duplicate submit, malformed SQS payload, OCR/parser failure, DB unavailable, SQS retry/DLQ, notification provider error, expired preview URL, and API 4xx/5xx all produce recoverable and non-misleading behavior.
+7. **Frontend deployment:** customer and reviewer routes work on the CloudFront domain after direct navigation/refresh; static assets load; CORS and authorization work; processing polling stops at the correct state.
 
 ### Failure-case testing
 
 - Assert every unsuccessful upload or processing step leaves the case/attempt in an honest state; no success notification or UI state may be sent before its corresponding operation is committed.
-- Assert SQS retries do not create duplicate extracted fields, comparisons, decisions, audit events, or notifications for a single logical attempt. Use the existing attempt/message identifiers for idempotent persistence where supported by the agreed schema.
+- Assert SQS retries do not create duplicate extracted fields, comparisons, decisions, audit events, or routine notification attempts for a single logical attempt. Use the attempt identifier and transactional/idempotent persistence defined by the agreed schema. Document the crash window between external notification delivery and recording its result; do not claim strict exactly-once delivery.
 - Assert reviewer decision failure does not partially update status without the corresponding decision/audit record.
 - Assert external service failures are logged without secrets or document contents and are visible through the configured operational metrics/alarms.
 
