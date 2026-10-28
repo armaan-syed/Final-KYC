@@ -1,0 +1,160 @@
+# Pramāṇa — Person B Backend (FastAPI + PostgreSQL + Cognito)
+
+This is Person B's implementation of the Pramāṇa KYC verification system backend.
+
+## What This Covers
+
+FastAPI application with PostgreSQL data layer, Cognito authentication, customer/KYC/reviewer API routes, presigned S3 URLs, SQS integration for the OCR worker, audit trail, and notification service interface.
+
+## Project Structure
+
+```
+backend/
+  app/
+    main.py               ← FastAPI app + Mangum Lambda handler
+    config.py             ← Pydantic settings from environment variables
+    database.py           ← SQLAlchemy engine + session factory
+    dependencies.py       ← get_db, get_current_customer, get_current_reviewer
+    models/
+      customer.py         ← Customer ORM model
+      kyc.py              ← KYCCase, KYCAttempt, KYCDocument, KYCDecision
+      verification.py     ← ExtractedField, FieldComparison
+      audit.py            ← AuditEvent
+      reviewer.py         ← Reviewer
+    schemas/
+      auth.py             ← Auth request/response Pydantic models
+      customer.py         ← Customer profile & KYC status schemas
+      kyc.py              ← Upload URL, submit, attempts schemas
+      verification.py     ← OCR worker message contract (shared with Person A)
+      reviewer.py         ← Reviewer dashboard, queue, decision, audit schemas
+    routers/
+      auth.py             ← POST /auth/register, confirm, login, refresh, logout
+      customer.py         ← GET/PUT /customer/profile, GET /customer/kyc/status
+      kyc.py              ← POST /kyc/upload-url, submit, GET /kyc/attempts
+      reviewer.py         ← GET /reviewer/dashboard, queue, cases, decide, audit
+    services/
+      cognito.py          ← Cognito JWT verification (JWKS, RS256)
+      s3.py               ← Presigned PUT/GET URLs, server-derived S3 keys
+      sqs.py              ← OCR worker job enqueueing
+      notification.py     ← SNS (SMS) + SES (email) sending + templates
+      kyc_service.py      ← KYC business logic (case lifecycle, decisions, audit)
+  migrations/
+    env.py                ← Alembic environment
+    versions/
+      001_initial_schema.py  ← Initial database migration
+  requirements.txt        ← Python dependencies
+  .env.example            ← Environment variable template (copy to .env)
+  .env                    ← Local development values (git-ignored, DO NOT COMMIT)
+  template.yaml           ← AWS SAM template (coordinate with Person A)
+  alembic.ini             ← Alembic configuration
+```
+
+## API Endpoints
+
+### Auth (public)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/auth/register` | Register new customer in Cognito |
+| POST | `/auth/confirm` | Confirm registration + create RDS customer row |
+| POST | `/auth/login` | Login — returns Cognito tokens |
+| POST | `/auth/refresh` | Refresh access token |
+| POST | `/auth/logout` | Sign out (requires customer JWT) |
+
+### Customer (customer JWT)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/customer/profile` | Get customer profile |
+| PUT | `/customer/profile` | Update profile |
+| GET | `/customer/kyc/status` | Get KYC case status + latest attempt |
+
+### KYC (customer JWT)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/kyc/upload-url` | Get presigned S3 URL, allocate attempt |
+| POST | `/kyc/submit` | Submit document, enqueue OCR job via SQS |
+| GET | `/kyc/attempts` | List attempt history |
+
+### Reviewer (reviewer JWT)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/reviewer/dashboard` | Summary counts |
+| GET | `/reviewer/queue` | Paginated cases needing review |
+| GET | `/reviewer/cases` | All cases with filters |
+| GET | `/reviewer/cases/{case_id}` | Full case detail + presigned doc URL |
+| POST | `/reviewer/cases/{case_id}/decide` | APPROVED / REJECTED / REUPLOAD_REQUESTED |
+| GET | `/reviewer/cases/{case_id}/audit` | Audit trail |
+
+## Database Schema
+
+```
+customers
+  └── kyc_cases (one per customer, unique)
+        └── kyc_attempts (one to many, attempt_number unique per case)
+              ├── kyc_documents (one per attempt)
+              ├── extracted_fields (many per attempt)
+              ├── field_comparisons (many per attempt)
+              └── kyc_decisions (one per attempt)
+
+audit_events (append-only, references cases and attempts)
+reviewers (separate Cognito pool)
+```
+
+## Status Values
+
+**KYC Case:** PENDING, PROCESSING, AUTO_VERIFIED, APPROVED, REJECTED, REUPLOAD_PENDING
+
+**KYC Attempt:** PROCESSING, AUTO_VERIFIED, REVIEW_REQUIRED, APPROVED, REJECTED, REUPLOAD_REQUESTED
+
+## SQS Message (to Person A's OCR worker)
+
+```json
+{
+  "kyc_attempt_id": "uuid",
+  "kyc_case_id": "uuid",
+  "customer_id": "uuid",
+  "s3_bucket": "bucket-name",
+  "s3_key": "documents/{customer_id}/{attempt_id}/{file}",
+  "document_type": "AADHAAR" | "PAN"
+}
+```
+
+## Local Development
+
+```bash
+cd backend
+
+# 1. Copy env template and fill in values from Person A
+cp .env.example .env
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Run migrations (requires PostgreSQL)
+alembic upgrade head
+
+# 4. Start the API locally
+uvicorn app.main:app --reload --port 8000
+
+# 5. Test with SAM local (simulates Lambda)
+sam local start-api
+```
+
+## Coordination with Person A
+
+Before deploying, obtain these values from Person A:
+- RDS host, port, db name, username, password
+- Cognito customer & reviewer pool IDs and app client IDs
+- S3 documents bucket name
+- SQS queue URL
+- SNS topic ARN
+- SES sender email
+
+## Security
+
+- `.env` is git-ignored — never commit real credentials
+- Cognito secrets are never in `NEXT_PUBLIC_*` variables
+- S3 keys are server-derived (no client-controlled paths)
+- Presigned URLs are short-lived
+- JWTs verified via Cognito JWKS with issuer/audience/expiry checks
+- Audit events are append-only (no update/delete endpoints)
+- Rejection SMS contains no sensitive details (portal-only)
