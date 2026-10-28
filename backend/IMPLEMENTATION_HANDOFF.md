@@ -1,63 +1,61 @@
-# Person B work handoff (B1, B5, B6, B7)
+# Person B implementation and deployment checkpoint
 
-## Implemented locally
+## Completed
 
-- **B1 — Configuration:** database credentials are no longer defaulted to a
-  shared `changeme` value; settings require either local `RDS_PASSWORD` or
-  deployed `RDS_SECRET_ARN`. Secrets Manager JSON is fetched for deployed
-  configuration, and SQLAlchemy URLs safely escape special characters.
-- **B5 — Reviewer APIs:** dashboard counts use UTC-day boundaries, case-list
-  filters are constrained to documented status values, case detail eager-loads
-  attempt relations, and reviewer decisions serialize on the case row to avoid
-  concurrent valid decisions. Attempt history includes attempt IDs.
-- **B6 — Notifications:** email HTML values are escaped; provider failures are
-  logged without recipient/message data; a decision commits before external
-  sends; each send attempt is appended to audit with only channel and provider
-  acceptance (not personal data or message content).
-- **B7 — Deployment component:** the backend template now expects the shared
-  private network and queue/database outputs and uses scoped secret/SQS/S3/SES
-  permissions. `infrastructure/database.yaml` defines a private encrypted RDS
-  instance with RDS-managed credentials in Secrets Manager.
-- Added focused tests for settings, database URL/secret handling, reviewer
-  query/decision behavior, and notification templates/provider errors.
+- Backend configuration, routes, schemas, SQLAlchemy models, Alembic migration,
+  S3 presigned upload/download, SQS producer, reviewer decisions/audit, and
+  shared notification adapter are implemented.
+- Reviewer dashboard uses UTC-day counts; decision changes are serialized; HTML
+  email content is escaped; provider failures avoid recipient/message logging.
+- Customer/reviewer Cognito pools and public clients already existed in the
+  account. Their outputs are in [`COGNITO_OUTPUTS.md`](COGNITO_OUTPUTS.md).
+  Reviewer self-registration is disabled. The customer pool now has the custom
+  attributes required by the registration API; `gender` uses Cognito's standard
+  attribute. The customer app client now allows the API's password-auth flow.
+- Private PostgreSQL was deployed in CloudFormation stack
+  `pramana-dev-database` using Person A's private network. It is PostgreSQL
+  18.3, `db.t4g.micro`, 20 GiB, encrypted, single-AZ, non-public, with one-day
+  automated backup retention and RDS-managed credentials in Secrets Manager.
+  The first create attempt was rejected because seven-day backups exceed this
+  account's Free Plan limit; the template now uses one day and omits storage
+  autoscaling. The failed empty stack was cleaned up before the successful
+  deployment.
+- RDS outputs, Cognito identifiers, and the shared layer ARN are recorded in
+  [`../implementation/PERSON_A_B_WORK_SPLIT.md`](../implementation/PERSON_A_B_WORK_SPLIT.md).
+- Backend unit suite: **19 passed**. AWS CloudFormation `validate-template`
+  passed for the database component. Live RDS properties and the secret ARN
+  were verified without retrieving or printing the secret value.
 
-## Explicitly not deployed / still needs coordination
+## Still blocked / outstanding
 
-- No project workload resources are provisioned. Person A has a reviewed
-  CloudFormation change set for `pramana-dev-foundation` in `us-east-1`; it is
-  `AVAILABLE` but unexecuted. It proposes two private subnets in distinct AZs,
-  a database security group, and one NAT gateway for private egress. The change
-  set has Person A's explicit approval, but its concrete VPC, subnet, and
-  security-group IDs are not available until execution. Execution is currently
-  paused because the CloudFormation compliance validator is unavailable. SAM's
-  separate managed artifact bucket holds the staged template/layer packages.
-- Read-only inspection found only the default VPC and no RDS instance. The
-  proposed new private network is not active until its change set is executed.
-  The RDS template inputs (`PrivateSubnetIds`, `DatabaseSecurityGroupId`) match
-  Person A's planned outputs and pass AWS CloudFormation `validate-template`
-  plus `cfn-lint`. The default `db.t4g.micro` incurs charges; RDS needs its own
-  reviewed change set and cost approval. The database's Retain policies mean a
-  later stack deletion would leave the database and its charges in place.
-- The proposed single NAT gateway provides outbound access for backend AWS
-  service calls and Cognito JWKS retrieval. It has ongoing hourly, public IPv4,
-  and data-processing charges; both private AZs route through that single-AZ
-  gateway. RDS reachability alone is not sufficient, so the egress design must
-  be accepted with the foundation change set.
-- The API/worker notification contract is unresolved: direct-to-phone SMS in
-  the current service versus publishing through an SNS topic, and which
-  component sends automated-result notifications. Do not integrate the worker
-  until A/B record those choices. The current API template's topic-scoped SNS
-  permission does not authorize the service's direct-to-phone call, so this
-  permission must be reconciled before deployment.
-- The shared root SAM/API Gateway authorizer boundary is not settled. The
-  backend template is a component template and must be incorporated once into
-  the approved root stack, not deployed as a parallel API/network stack.
-- Notification audit records distinguish provider acceptance from final
-  delivery. The external-provider/database crash window remains non-atomic;
-  this does not claim exactly-once delivery.
-- SAM is available in the project virtual environment, and local SAM/template
-  validation plus AWS `validate-template` have passed. No RDS migration has
-  been applied to AWS; deployed SAM/API and database integration remain
-  unverified. The latest test run skipped the PostgreSQL integration check
-  because no dedicated database URL was configured; an earlier disposable
-  migrated-PostgreSQL integration run passed.
+- **Migration not applied:** the RDS endpoint is private and the developer
+  workstation has no VPC route. A migration runner in the private subnets must
+  retrieve its secret and connect to PostgreSQL.
+- **Person A network dependency:** the deployed VPC has no NAT and only the S3
+  gateway endpoint. Private Lambda calls to Secrets Manager, SQS, SNS, SES, and
+  Cognito/JWKS need Person A's approved interface-endpoint design. Person A owns
+  this networking work; do not add endpoints or NAT from the B component. The
+  Person A plan estimates about `$65.70/month` fixed plus data for its proposed
+  multi-AZ endpoint design; verify current pricing before approval.
+- **Backend/API not deployed:** first apply the migration, then deploy the
+  reviewed B API component. The shared layer already exists as
+  `arn:aws:lambda:us-east-1:682197558335:layer:pramana-dev-shared-notifications:2`;
+  the B template now consumes it rather than creating a duplicate. API Gateway
+  authorizer versus FastAPI-only authorization still needs Person A's agreement
+  and stack review.
+- **SES sender pending:** the account has no verified email identities. Supply
+  an approved sender email or domain and complete SES verification/access setup
+  before deploying email notifications. Customer SMS uses direct-to-phone SNS
+  through the shared module; the alarm SNS topic is not a customer topic.
+- **Full integration pending:** OCR worker and CloudFront remain disabled in
+  Person A's stack. A/B/C still need the deployed API → upload → SQS → worker →
+  database → status → reviewer/notification checks, plus the final status and
+  auth handoff with Person C.
+- The existing Cognito pools are outside the CloudFormation stacks. Avoid
+  replacement pools; coordinate future stack import/ownership with Person A.
+- The DB stack has `DeletionPolicy: Retain`; deleting its stack will leave the
+  database and its charges in place. Do not delete the database without an
+  explicit data-retention decision.
+
+No database password, Cognito user credentials, real identity documents, or
+customer data are recorded in this handoff.

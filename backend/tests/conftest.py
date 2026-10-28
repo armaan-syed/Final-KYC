@@ -10,5 +10,6 @@ for key, value in {
     "S3_DOCUMENTS_BUCKET": "test-documents",
     "SQS_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/000000000000/test-queue",
     "RDS_PASSWORD": "test-only-password",
+    "SES_SENDER_EMAIL": "verified-sender@example.com",
 }.items():
     os.environ.setdefault(key, value)

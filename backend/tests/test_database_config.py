@@ -17,6 +17,7 @@ def _required_settings(**overrides):
         "cognito_reviewer_app_client_id": "reviewer-client",
         "s3_documents_bucket": "documents",
         "sqs_queue_url": "https://sqs.example.com/test",
+        "ses_sender_email": "verified-sender@example.com",
     }
     values.update(overrides)
     return values

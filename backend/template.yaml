@@ -9,13 +9,13 @@ Metadata:
     must:
       - integrate once into the reviewed root stack; do not create a parallel shared API or network
       - Lambda uses private subnets; RDS secret is read only by its scoped execution role
-      - API and worker status/queue/auth contracts must be agreed before integration
+      - API Gateway auth boundary and SES sender identity must be agreed before deployment
     ref:
       - at: README.md
         has: deployment order, required outputs, and migration runbook
         scope: integration
       - at: IMPLEMENTATION_HANDOFF.md
-        has: unresolved authorizer/SMS contract and verification blockers
+        has: deployed resources, remaining connectivity/SES blockers, and verification state
         scope: coordination
 
 Parameters:
@@ -41,6 +41,14 @@ Parameters:
     Type: String
     Description: Cognito Reviewer App Client ID
 
+  CustomerUserPoolArn:
+    Type: String
+    Description: Customer user-pool ARN used to scope AdminGetUser after confirmation
+
+  SharedNotificationsLayerArn:
+    Type: String
+    Description: Shared notifications and RDS CA Lambda layer ARN from Person A's foundation stack
+
   DocumentsBucket:
     Type: String
     Description: S3 bucket for KYC documents
@@ -52,10 +60,6 @@ Parameters:
   SQSQueueArn:
     Type: String
     Description: SQS queue ARN for least-privilege SendMessage permission
-
-  SNSTopicArn:
-    Type: String
-    Description: SNS topic ARN for notifications
 
   SESSenderEmail:
     Type: String
@@ -93,23 +97,6 @@ Parameters:
 Transform: AWS::Serverless-2016-10-31
 
 Resources:
-  SharedNotificationsLayer:
-    Type: AWS::Serverless::LayerVersion
-    Metadata:
-      com.aws.cloudformation.Context:
-        why: Shares notification templates and the RDS CA bundle with the OCR worker.
-        must:
-          - Keep RDS hostname verification enabled.
-        mutable: change-with-constraints
-    Properties:
-      LayerName: !Sub 'pramana-${Environment}-shared-notifications'
-      Description: Shared notification implementation and RDS CA trust bundle.
-      ContentUri: ../infra/shared/dist/layer
-      CompatibleRuntimes:
-        - python3.11
-      CompatibleArchitectures:
-        - x86_64
-
   BackendLambdaFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -133,7 +120,6 @@ Resources:
           COGNITO_REVIEWER_APP_CLIENT_ID: !Ref ReviewerAppClientId
           S3_DOCUMENTS_BUCKET: !Ref DocumentsBucket
           SQS_QUEUE_URL: !Ref SQSQueueUrl
-          SNS_TOPIC_ARN: !Ref SNSTopicArn
           SES_SENDER_EMAIL: !Ref SESSenderEmail
           API_BASE_URL: !Sub https://${ApiGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
       VpcConfig:
@@ -141,7 +127,7 @@ Resources:
           - !Ref BackendLambdaSecurityGroupId
         SubnetIds: !Ref PrivateSubnetIds
       Layers:
-        - !Ref SharedNotificationsLayer
+        - !Ref SharedNotificationsLayerArn
       Policies:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
@@ -154,7 +140,14 @@ Resources:
             - Effect: Allow
               Action:
                 - sns:Publish
-              Resource: !Ref SNSTopicArn
+              Resource: "*"
+              Condition:
+                StringEquals:
+                  aws:RequestedRegion: !Ref AWS::Region
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminGetUser
+              Resource: !Ref CustomerUserPoolArn
             - Effect: Allow
               Action:
                 - ses:SendEmail

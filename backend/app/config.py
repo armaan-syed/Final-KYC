@@ -37,11 +37,8 @@ class Settings(BaseSettings):
     # SQS Queue for OCR Worker
     sqs_queue_url: str
 
-    # SNS Topic for SMS notifications
-    sns_topic_arn: str | None = None
-
     # SES Sender Email
-    ses_sender_email: str = "noreply@pramana.example.com"
+    ses_sender_email: str
 
     # API
     api_base_url: str = "http://localhost:8000"

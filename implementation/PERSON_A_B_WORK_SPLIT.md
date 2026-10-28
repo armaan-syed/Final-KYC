@@ -32,7 +32,7 @@ resources manually.
 | Database | Provide the VPC, private subnets, and network/security-group references; implement the worker's persistence adapter after the schema checkpoint. | Own the PostgreSQL RDS instance/database configuration and its Secrets Manager secret inside the VPC provided by A. Own models, Alembic migrations, schema verification, and backend database access. |
 | Cognito | Consume B's pool/client outputs in the API Gateway authorizer configuration and deployment parameters. | Create and configure customer/reviewer user pools and app clients; disable reviewer self-registration; provide pool IDs, app client IDs, issuers, and token/authorizer requirements to A and public configuration to C. |
 | Backend API | Provide shared infrastructure references and integrate the backend component with the shared stack. | Own FastAPI, backend Lambda configuration, backend API Gateway routes/integration, API-specific IAM permissions and environment settings, auth, customer/KYC/reviewer services, and API tests. |
-| Notifications | Integrate the worker with B's shared notification interface and coordinate worker permissions/configuration. | Own the notification module and SNS topic/SES sender identity and settings, templates, and tests. Provide resource definitions and outputs for integration. |
+| Notifications | Integrate the worker with B's shared notification interface and coordinate worker permissions/configuration. | Own the shared notification module, direct-phone SNS SMS and SES sender identity/configuration, templates, and tests. A separate customer SNS topic is not used by the agreed direct-phone contract. |
 | Stack integration and release | Own the shared/root SAM template and foundation stack; review cross-stack dependencies, full-stack cost and change sets, and coordinate the release. | Own and provision the B-specific backend/database/notification component stack using A's network outputs. Supply its outputs to A and C. No B-owned stack is deployed until A has reviewed and approved its change set. |
 
 ## Handoffs
@@ -54,29 +54,31 @@ resources manually.
 - The reviewed integration/deployment path for B's backend, database, and
   notification resource definitions.
 
-Person B can create the private RDS subnet group and RDS security-group
-attachment from these outputs. Do not expect backend/worker AWS API calls from
-the private subnets to work until the team chooses and deploys interface
-endpoints (or later approves another egress path).
+Person B's private RDS database is deployed from these outputs. Do not expect
+backend/worker AWS API calls from the private subnets to work until the team
+chooses and deploys interface endpoints (or later approves another egress path).
 
 ### Person B provides to Person A and Person C
 
-- Customer/reviewer Cognito pool IDs, app client IDs, issuer URLs, and
-  authorizer/token requirements; C receives only public configuration.
-- RDS endpoint, port, database name, and Secrets Manager secret ARN after the
-  database exists. Do not put the database password in this document, source
-  control, or ordinary chat.
+- Customer pool `us-east-1_8Q9onMEne`, client `1rtg8t1nbggjsf2i0d8g7jqqov`;
+  reviewer pool `us-east-1_IQzz0ktCu`, client `5fh52722t9o0le48pieqavtcv0`.
+  Issuers and public client configuration are in `../backend/COGNITO_OUTPUTS.md`.
+- RDS endpoint `pramana-dev-database-db.citogy2m6wxr.us-east-1.rds.amazonaws.com`,
+  port `5432`, database `pramana_kyc`, and secret ARN
+  `arn:aws:secretsmanager:us-east-1:682197558335:secret:rds!db-3d281b6c-5013-4ee5-abc6-2970ac631d50-Cb3oaQ`.
+  The secret value is never written here, source-controlled, or shared in chat.
 - Backend API Gateway URL and backend Lambda configuration/permission needs.
-- SNS topic ARN, SES sender identity/configuration, and the notification module
-  interface used by both the API and worker.
+- Shared notifications layer ARN:
+  `arn:aws:lambda:us-east-1:682197558335:layer:pramana-dev-shared-notifications:2`.
+- Customer SMS uses direct phone delivery through SNS; no customer SNS topic is
+  used. SES sender identity and API URL remain pending.
 - Reviewed Alembic migrations, schema/status/message contract, and test evidence.
 
-Person A's network, bucket, and queue identifiers are now available above.
-Person B's RDS endpoint, Cognito outputs, and notification identities remain
-pending. Share secret values only through the agreed secure mechanism; provide
-secret ARNs and non-secret connection metadata in handoff notes. Use coordinated
-SAM/CloudFormation stacks or nested templates; do not create parallel
-console-managed copies of resources already defined in code.
+Person A's network, bucket, and queue identifiers and Person B's RDS/Cognito
+outputs are now available above. The RDS master password remains only in the
+RDS-managed Secrets Manager secret. SES sender identity, API URL, and API/worker
+runtime connectivity remain pending. Use coordinated SAM/CloudFormation stacks
+or nested templates; do not create parallel copies of shared resources.
 
 ## Shared contract implementation baseline
 
@@ -88,16 +90,15 @@ The following A/B contract is implemented and locally tested in code. Person B s
 4. **Statuses:** case states are `PENDING`, `PROCESSING`, `AUTO_VERIFIED`, `REVIEW_REQUIRED`, `APPROVED`, `REJECTED`, `REUPLOAD_PENDING`; attempt states are `PROCESSING`, `AUTO_VERIFIED`, `REVIEW_REQUIRED`, `APPROVED`, `REJECTED`, `REUPLOAD_REQUESTED`. Re-upload updates the existing attempt and case separately; the next upload creates a new attempt. Person C should align its status model.
 5. **Comparison:** current code compares Aadhaar name, date of birth, and gender; PAN name and date of birth. Aadhaar/PAN identifiers and Aadhaar address are extracted and stored but not compared. Person A's source describes address as optional/lower-weight, but its confidence/weight rules are unspecified; B/A must agree before adding it. Missing required fields produce `REVIEW_REQUIRED`. Match percentage is written to audit JSON; B's schema has no score column. Tesseract word confidence (0–100) is stored per extracted field when tokens map reliably, otherwise `confidence` stays null.
 6. **Notifications:** worker auto-verification uses the shared notification module to send generic SMS directly to the customer phone and SES email after commit. B's reviewer-decision path sends its existing notifications. The proposed B customer SNS topic is not used by current code; submit/re-upload notification ownership remains open. Provider delivery is best-effort and cannot be atomic with the DB transaction.
-7. **Authentication:** B's FastAPI validates Cognito JWTs. Pool/client outputs and API Gateway authorizer configuration are not present. A's root SAM does not currently wire authorizers into B's separate REST API; settle this boundary with B when pools/API design are available.
+7. **Authentication:** B's FastAPI validates customer/reviewer Cognito ID tokens against their respective issuers and clients. Pool/client outputs are available. API Gateway authorizer wiring remains a coordination decision; the current B component uses FastAPI authorization behind a catch-all route.
 
-The shared foundation stack is deployed, but it contains no RDS, Cognito,
-backend API/Lambda, OCR worker, customer-notification SNS, SES identity, or
-CloudFront distribution. Its no-NAT CloudFormation update has removed the NAT
-gateway, public IPv4, and public routes; the stack keeps the private network IDs
-above. Person B and Person C's existing AWS administrator access remains
-unchanged. See the [Person A plan](PERSON_A_IMPLEMENTATION_PLAN.md#aws-foundation-deployment-and-no-nat-update-2026-10-29)
-for verified resource outputs, endpoint requirements, costs, and the update
-change-set ARN.
+The shared foundation stack is deployed with OCR worker and CloudFront disabled.
+Person B's private RDS stack is now deployed; the Cognito pools pre-existed in
+the account and have been configured for the API contract. The foundation has no
+NAT or interface endpoints, so private Lambdas still cannot call Secrets
+Manager, SQS, SNS, SES, or Cognito. SES identity and the backend API are not yet
+deployed. See the [Person A plan](PERSON_A_IMPLEMENTATION_PLAN.md#aws-foundation-deployment-and-no-nat-update-2026-10-29)
+for endpoint options/costs and the foundation change-set record.
 
 ## Completion checkpoints
 

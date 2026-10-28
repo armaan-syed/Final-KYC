@@ -147,7 +147,20 @@ sam local start-api
 The database component template is `infrastructure/database.yaml`. It creates a
 private encrypted PostgreSQL instance, RDS-managed master credentials in Secrets
 Manager, and a DB subnet group. It intentionally consumes rather than creates
-the shared VPC and database security group. Before deploying, obtain and review:
+the shared VPC and database security group. The dev stack is now deployed as
+`pramana-dev-database`; current non-secret outputs are in
+[`COGNITO_OUTPUTS.md`](COGNITO_OUTPUTS.md) and
+[`IMPLEMENTATION_HANDOFF.md`](IMPLEMENTATION_HANDOFF.md). The instance is
+`db.t4g.micro`, 20 GiB, single-AZ, and has one-day automated backup retention to
+fit the account's Free Plan. It is encrypted and not publicly accessible.
+
+The AWS-managed database secret is created, but private Lambdas cannot retrieve
+it or call Cognito/SQS/SNS/SES until Person A adds and approves the required VPC
+interface endpoints. The local workstation also has no private route to RDS, so
+the Alembic migration is not yet applied. Do not deploy the API/worker before
+that connectivity and migration step are complete.
+
+For any new environment, obtain and review:
 
 - At least two private subnet IDs in different Availability Zones.
 - A database security group allowing TCP 5432 only from approved application
@@ -162,11 +175,12 @@ ARN to the backend component; the Lambda retrieves credentials from Secrets
 Manager using its scoped IAM permission. The database password is never an
 ordinary CloudFormation parameter or source-controlled setting.
 
-`template.yaml` requires the database secret ARN, private subnet IDs, backend
-Lambda security group, SQS queue ARN/URL, SES identity ARN, and the shared
-resource outputs. It is a component template, not approval to deploy a second
-shared API/VPC stack. Confirm the root-template/API Gateway authorizer design
-with Person A before integration.
+`template.yaml` consumes the database secret ARN, private subnet IDs, backend
+Lambda security group, SQS queue ARN/URL, SES identity ARN, Cognito settings,
+and Person A's shared notifications layer ARN. It does not create a duplicate
+notifications layer. It is a component template, not approval to deploy a
+second shared network stack. Confirm the root-template/API Gateway authorizer
+design with Person A before integration.
 
 ## Coordination with Person A
 
@@ -176,8 +190,9 @@ Before deploying, coordinate these non-secret outputs and references:
   SQS queue URL/ARN, and `us-east-1` region.
 - From B: RDS endpoint/port/database name and Secrets Manager ARN, Cognito
   customer/reviewer pool and app-client IDs, SES sender identity, and API outputs.
-- Confirm whether customer SMS uses an SNS topic or direct phone delivery; the
-  current API/worker notification integration still needs an agreed contract.
+- SMS is direct-to-phone through the shared notification module; do not use the
+  foundation alarm topic for customer notifications. SES sender identity is
+  still pending a verified sender address/domain.
 
 The RDS endpoint and secret ARN are supplied by the Person B database stack.
 Never put the database password in this README, chat, or source control.

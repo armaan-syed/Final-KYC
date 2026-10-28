@@ -54,6 +54,13 @@ Conditions:
 Resources:
   DatabaseSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Keeps the database ENIs in the shared foundation's two private AZs.
+        must:
+          - Use only the approved private subnets from Person A.
+          - Do not create or modify shared VPC networking in this component.
+        mutable: change-with-constraints
     Properties:
       DBSubnetGroupDescription: !Sub Private subnets for Pramana ${Environment} PostgreSQL
       SubnetIds: !Ref PrivateSubnetIds
@@ -67,12 +74,20 @@ Resources:
     Type: AWS::RDS::DBInstance
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Encrypted PostgreSQL store for KYC records; dev uses a single AZ and the account's Free Plan backup-retention limit.
+        must:
+          - Keep the instance private and storage encrypted.
+          - Keep master credentials RDS-managed in Secrets Manager.
+          - Permit database ingress only through the reviewed database security group.
+          - Keep dev backups at the account Free Plan's one-day limit and avoid unreviewed storage autoscaling.
+        mutable: change-with-constraints
     Properties:
       DBInstanceIdentifier: !Sub "${AWS::StackName}-db"
       Engine: postgres
       DBInstanceClass: !Ref DBInstanceClass
       AllocatedStorage: !Ref AllocatedStorage
-      MaxAllocatedStorage: 100
       StorageType: gp3
       StorageEncrypted: true
       DBName: !Ref DatabaseName
@@ -83,7 +98,7 @@ Resources:
         - !Ref DatabaseSecurityGroupId
       PubliclyAccessible: false
       MultiAZ: !If [IsProduction, true, false]
-      BackupRetentionPeriod: 7
+      BackupRetentionPeriod: 1
       DeletionProtection: !If [IsProduction, true, false]
       AutoMinorVersionUpgrade: true
       CopyTagsToSnapshot: true
