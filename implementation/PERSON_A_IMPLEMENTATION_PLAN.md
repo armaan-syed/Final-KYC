@@ -47,6 +47,31 @@ Own the AWS backbone and deployment: account/IAM setup, SAM infrastructure, priv
 
 Deliver a deployable, least-privilege AWS stack and a working OCR worker that accepts the agreed SQS contract, processes documents, persists extraction/comparison outcomes using Person B's schema, sets the agreed status, and emits the correct existing notifications.
 
+### Person A execution status
+
+#### Completed
+
+- [x] Reviewed the repository, project context, AWS configuration, and current Git state. Confirmed AWS validation uses the non-root `pramana-admin` IAM user.
+- [x] Implemented the local Aadhaar/PAN parsers, normalization, field comparison, and OCR-to-field pipeline. Added synthetic fixtures and a pinned Lambda-layer build recipe.
+- [x] Added 12 pure-Python tests; all pass.
+- [x] Added the initial SAM foundation: private document and access-log buckets, private frontend storage behind CloudFront OAC, and encrypted OCR queue/DLQ.
+- [x] Parsed the SAM template locally, checked resource references for dependency cycles, and passed AWS CloudFormation `validate-template` in `us-east-1`.
+- [x] Preserved Person B and Person C's existing `AdministratorAccess`; no teammate IAM users or policies were changed.
+- [x] Kept local `.env` ignored by Git and set the project region/output defaults; no credential values were committed.
+
+#### Remaining
+
+- [ ] **Blocked by the Docker daemon:** build the Lambda-compatible Tesseract/OpenCV/PDF layer and run the synthetic image/PDF OCR proof. The layer recipe exists, but the native runtime has not been verified.
+- [ ] **Blocked on shared contracts:** settle the upload-to-queue path, attempt/object-key lifecycle, database/SQS failure boundary, status vocabulary, Cognito/API route ownership, notification ownership, canonical field names/comparison rules, and static frontend route behavior. See the shared contract table above.
+- [ ] Complete the rest of A3: VPC/private RDS and secrets, Lambda functions and execution roles, API Gateway and Person B's Cognito authorizers, exactly one agreed queue trigger, SNS/SES, and CloudWatch logs/alarms/dashboard.
+- [ ] Complete A4 worker integration: SQS validation/retries, S3 document handling, database persistence, transaction/idempotency behavior, and queue-to-database integration tests after the contracts are agreed.
+- [ ] Complete A5 notification and monitoring integrations, including DLQ/error alarms and deployed checks.
+- [ ] Complete the teammate resource/output inventory once Person B's Cognito outputs and the remaining stack resources are defined.
+- [ ] Review costs and a concrete CloudFormation change set. No AWS resources have been deployed; do not deploy until Person A approves the reviewed change set.
+- [ ] Run the end-to-end deployed smoke checks and finish the secure handoff to Persons B and C.
+
+The template passed AWS `validate-template`; SAM CLI, `cfn-lint`, and `cfn-guard` checks have not run because those tools are not installed. This status distinguishes local unit/template validation from runtime and deployed verification.
+
 ### Prerequisites and dependencies
 
 - Inspect the current tree and the Person A, B, and project context documents.
