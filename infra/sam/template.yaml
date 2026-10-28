@@ -1,0 +1,277 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Pramana document and frontend foundation — keeps documents private and serves
+  the static frontend through CloudFront while upload processing contracts are finalized.
+
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: Private S3 documents -> SQS OCR queue; private frontend S3 -> CloudFront OAC
+    must:
+      - Document bucket blocks public access and requires TLS; application role access must be scoped when those roles are defined
+      - Enable exactly one upload-to-queue path after the shared contract is agreed
+      - Person B and Person C administrator access stays unchanged until Person A removes it manually
+      - Do not deploy this foundation until account-specific cost review and user approval
+    ref:
+      - at: infra/README.md
+        has: SAM foundation scope, resource rationale, deployment gate, and open contracts
+      - at: context/person-a.md
+        has: Person A security, storage, queue, and Cognito ownership requirements
+      - at: implementation/PERSON_A_IMPLEMENTATION_PLAN.md
+        has: contract checkpoint and acceptance criteria
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: pramana
+    AllowedPattern: '^[a-z][a-z0-9-]{1,14}$'
+    ConstraintDescription: Use 2-15 lowercase letters, digits, or hyphens; start with a letter.
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  DocumentAccessLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  DocumentBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - PUT
+            AllowedOrigins:
+              - !Sub 'https://${FrontendDistribution.DomainName}'
+            MaxAge: 3600
+      LoggingConfiguration:
+        DestinationBucketName: !Ref DocumentAccessLogsBucket
+        LogFilePrefix: document-access/
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  DocumentBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DocumentBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt DocumentBucket.Arn
+              - !Sub '${DocumentBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  DocumentAccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DocumentAccessLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt DocumentAccessLogsBucket.Arn
+              - !Sub '${DocumentAccessLogsBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: AllowDocumentBucketAccessLogs
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${DocumentAccessLogsBucket.Arn}/*'
+            Condition:
+              ArnLike:
+                aws:SourceArn: !GetAtt DocumentBucket.Arn
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  FrontendOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${ProjectName}-${Environment}-frontend'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FrontendDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub '${ProjectName}-${Environment} static frontend'
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        PriceClass: PriceClass_100
+        Origins:
+          - DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            Id: PrivateFrontendBucket
+            OriginAccessControlId: !GetAtt FrontendOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: PrivateFrontendBucket
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt FrontendBucket.Arn
+              - !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - Sid: AllowCloudFrontOACReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${FrontendDistribution}'
+
+  OCRDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+
+  OCRQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt OCRDeadLetterQueue.Arn
+        maxReceiveCount: 3
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 300
+
+Outputs:
+  DocumentBucketName:
+    Description: Private bucket for KYC documents.
+    Value: !Ref DocumentBucket
+  DocumentBucketArn:
+    Description: ARN of the private KYC document bucket.
+    Value: !GetAtt DocumentBucket.Arn
+  FrontendBucketName:
+    Description: Private S3 bucket served only through the CloudFront distribution.
+    Value: !Ref FrontendBucket
+  FrontendDistributionId:
+    Description: CloudFront distribution ID for frontend deployment invalidations.
+    Value: !Ref FrontendDistribution
+  FrontendDistributionDomainName:
+    Description: CloudFront URL for the static frontend.
+    Value: !GetAtt FrontendDistribution.DomainName
+  OCRQueueUrl:
+    Description: URL of the standard OCR queue; no producer or trigger is wired yet.
+    Value: !Ref OCRQueue
+  OCRQueueArn:
+    Description: ARN of the standard OCR queue.
+    Value: !GetAtt OCRQueue.Arn
+  OCRDeadLetterQueueArn:
+    Description: ARN of the OCR dead-letter queue.
+    Value: !GetAtt OCRDeadLetterQueue.Arn

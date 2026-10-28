@@ -2,3 +2,10 @@
 .env
 .env.*
 !.env.example
+
+# Python build and test artifacts
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+infra/ocr/.build*/

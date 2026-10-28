@@ -11,3 +11,9 @@ The work is split into three standalone plans, one for each existing assignment.
 ## Shared integration plan
 
 - [Final project integration and end-to-end verification](FINAL_PROJECT_INTEGRATION.md)
+
+## Person A execution note — 2026-10-28
+
+Person A confirms Person B and Person C are 100% trusted teammates. Their existing AWS `AdministratorAccess` must remain unchanged during Person A's implementation. Person A will remove their access manually after the implementation; do not modify either teammate's AWS access as part of this work.
+
+Person A has completed the repository/AWS baseline review and implemented the local OCR parsing, normalization, comparison, and extraction pipeline. The 12 pure-Python tests pass. A first SAM foundation template has been drafted, parsed locally, and checked for resource dependency cycles. The ignored local `.env` is configured for the project default region `us-east-1` and JSON output; its existing credential values were preserved and have not been used. Earlier `aws login` attempts selected the root identity and were not used for AWS calls. The active AWS caller was verified as the non-root IAM user `pramana-admin`; CloudFormation `validate-template` passed in `us-east-1`. No AWS resources have been deployed and no teammate IAM users or policies have been changed. Native OCR validation is blocked by the unavailable Docker daemon, and database/message/queue-trigger contracts remain open.

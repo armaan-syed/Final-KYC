@@ -9,7 +9,7 @@
 
 | Area | What You Own |
 |---|---|
-| AWS Account & IAM | Account setup, IAM users for B and C, least-privilege policies |
+| AWS Account & IAM | Account setup and least-privilege application execution roles |
 | Infrastructure as Code | CDK or SAM — provision all AWS resources |
 | S3 | Document bucket, frontend hosting bucket, bucket policies |
 | SQS | OCR processing queue, dead-letter queue |
@@ -29,9 +29,8 @@
 
 ### 1.1 Your Responsibilities
 You own the AWS root account and are responsible for:
-- Enabling MFA on the root account immediately
 - Creating an admin IAM user for your own day-to-day work (never use root for development)
-- Creating IAM users for Person B and Person C with scoped permissions
+- Leaving the existing Person B and Person C administrator access unchanged during implementation; Person A will remove it manually afterward
 - Never committing AWS credentials to git
 
 ### 1.2 IAM Users for Team Members
@@ -54,8 +53,10 @@ Needs access to:
 - Cognito IDs are public configuration supplied by Person B; no Cognito management access is needed
 - CloudWatch (read logs for frontend debugging)
 
+**Access decision for this project:** Person A considers Person B and Person C 100% trusted teammates; both currently have `AdministratorAccess`. Keep both users' access unchanged while Person A implements the project. Person A will remove their access manually after implementation; do not change their AWS users or policies as part of this work.
+
 ### 1.3 IAM Policy Principle
-Apply **least privilege** — each person gets only what they need for their specific tasks. Use IAM policies scoped to specific resource ARNs where possible (e.g., only the Pramāṇa S3 bucket, not all S3).
+For newly created application execution roles, apply **least privilege** and scope policies to specific resource ARNs where possible. The current Person B and Person C administrator access is an explicit Person A decision and must remain unchanged until Person A removes it manually after implementation.
 
 ### 1.4 Secrets Management
 - Database credentials → **AWS Secrets Manager** (never hardcoded)
@@ -76,7 +77,7 @@ Use **AWS SAM (Serverless Application Model)** for this project.
 
 ### 2.2 Resources You Provision (SAM template)
 - S3 bucket — document storage (private, versioning enabled)
-- S3 bucket — frontend hosting (public read, static website)
+- S3 bucket — private frontend hosting behind CloudFront Origin Access Control
 - SQS queue — OCR processing queue
 - SQS queue — dead-letter queue (for failed OCR jobs)
 - Lambda function — FastAPI backend (Person B's code)
@@ -149,7 +150,7 @@ The backend Lambda (Person B) will call S3 to generate presigned upload URLs so 
 - **CloudWatch alarm:** Alert when DLQ has > 0 messages (means OCR failures)
 
 ### 4.3 SQS → Lambda Trigger
-The OCR Worker Lambda is triggered by SQS. Configure:
+The OCR Worker Lambda is triggered by SQS. The enqueue path is unresolved: Person B and Person C describe `POST /kyc/submit` sending the job, while this document and the architecture describe S3 sending an event to SQS. Resolve the shared contract before enabling either trigger; do not configure both. After that decision, configure:
 - Batch size: 1 (process one document at a time — OCR is CPU intensive)
 - Maximum concurrency: 5 (prevent Lambda from spinning up too many OCR workers simultaneously)
 
@@ -509,8 +510,7 @@ Create a CloudWatch dashboard showing:
 ### 12.1 What You Provide to Person B
 These values must be shared securely (not via git — use a shared secure note or AWS Secrets Manager):
 - RDS endpoint, port, database name
-- Cognito User Pool IDs (customer + reviewer)
-- Cognito App Client IDs
+- API Gateway authorizer inputs from Person B's Cognito pool/client outputs
 - S3 document bucket name and ARN
 - SQS queue URL
 - SNS topic ARN
@@ -525,7 +525,7 @@ These values must be shared securely (not via git — use a shared secure note o
 ### 12.3 What You Provide to Person C
 - CloudFront domain (for frontend deployment)
 - API Gateway base URL
-- Cognito User Pool ID and App Client ID (for Amplify/Auth SDK config)
+- Person B supplies the Cognito public configuration directly to Person C
 - S3 frontend bucket name (for deployment)
 
 ### 12.4 Critical Contract: Presigned URL Upload Flow
@@ -533,7 +533,7 @@ The document upload flow crosses all three people:
 1. Person C (frontend) requests a presigned upload URL from the API
 2. Person B (backend) generates the presigned URL using the S3 bucket you provisioned
 3. Person C uploads directly to S3 using the presigned URL
-4. S3 triggers SQS (you configure this S3 event notification)
+4. The enqueue path is unresolved: Person A's architecture says S3 triggers SQS, while Person B and Person C say `POST /kyc/submit` enqueues the job. Agree on one path before configuring a trigger; do not enable both.
 5. Your OCR Worker picks up the SQS message and processes the document
 
 This flow must be agreed and tested end-to-end.
@@ -542,21 +542,20 @@ This flow must be agreed and tested end-to-end.
 
 ## 13. Build Order for Person A
 
-1. **AWS account setup** — MFA, admin IAM user, team IAM users
+1. **AWS account setup** — confirm Person A's day-to-day admin identity; leave Person B and Person C's access unchanged
 2. **Tesseract + OpenCV Lambda Layer POC** — prove it works before anything else
-3. **SAM template skeleton** — provision S3, SQS, RDS, Cognito, API Gateway stubs
+3. **SAM template skeleton** — provision the agreed S3, SQS, RDS, API Gateway, Lambda, and monitoring resources; consume Person B's Cognito resources
 4. **VPC + security groups** — RDS in private subnet
 5. **RDS instance** — PostgreSQL t3.micro, confirm Person B can connect
 6. **S3 buckets** — document bucket + frontend bucket with correct policies
 7. **SQS queues** — OCR queue + DLQ
-8. **Cognito user pools** — customer + reviewer pools, app clients
-9. **OCR Worker Lambda** — full implementation with OpenCV + Tesseract + parser + verification engine
-10. **SNS + SES** — notification topics, email verification
-11. **CloudWatch** — log groups, alarms, dashboard
-12. **API Gateway** — HTTP API, Cognito authorizer, routes (connect to Person B's Lambda)
-13. **CloudFront** — distribution for frontend bucket
-14. **Final deployment** — `sam deploy` full stack
-15. **IAM review** — audit all policies before demo
+8. **OCR Worker Lambda** — full implementation with OpenCV + Tesseract + parser + verification engine
+9. **SNS + SES** — notification topics, email verification
+10. **CloudWatch** — log groups, alarms, dashboard
+11. **API Gateway** — HTTP API, Cognito authorizer, routes (connect to Person B's Lambda)
+12. **CloudFront** — distribution for frontend bucket
+13. **Final deployment** — `sam deploy` full stack
+14. **IAM review** — audit application roles and policies before demo; preserve B/C administrator access until Person A removes it manually
 
 ---
 

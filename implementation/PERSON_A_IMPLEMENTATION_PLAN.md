@@ -50,7 +50,7 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 ### Prerequisites and dependencies
 
 - Inspect the current tree and the Person A, B, and project context documents.
-- Obtain the AWS account/region and secure deployment access. Enable root MFA and use a scoped administrative identity for daily work; never use root credentials in development.
+- Obtain the AWS account/region and secure deployment access. Use a separate administrative identity for daily work; never use root credentials in development.
 - Agree with Person B on migration/schema ownership, table/column names, transaction expectations, and the SQS message shape before the worker writes to RDS.
 - Resolve the upload-to-SQS, status, comparison-field, notification, and upload-format contracts above.
 - Obtain Person B's Cognito pool/client configuration plus the required S3/SQS/API values for infrastructure wiring. Store secrets in Secrets Manager or encrypted Lambda configuration, not source control.
@@ -61,7 +61,7 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 
 - Inspect repository conventions, existing SAM files, AWS profiles, ignored files, and deployment scripts. Do not overwrite an existing stack.
 - If no implementation exists, establish an infrastructure folder with a SAM template, parameter/config examples, deployment instructions, and separate OCR worker source/tests. Keep resource names and outputs consistent with the `pramana-*` names in context.
-- Set up root MFA, use a separate day-to-day admin identity, and create the assigned IAM identities/access for Persons B and C with scoped permissions to this project's named resources. Never distribute root credentials or grant broad administrator permissions to team members.
+- Keep Person B and Person C's existing `AdministratorAccess` unchanged during this implementation, as explicitly directed by Person A. Person A will remove their access manually after the implementation. Do not edit their users, groups, or policies. Never distribute root credentials.
 - Create a resource/output inventory for Person B and C, including the Cognito outputs supplied by Person B.
 
 **Files/modules:** SAM `template.yaml` (at the agreed repo location), SAM config/parameter examples, deployment README or the existing equivalent, OCR source and test modules.

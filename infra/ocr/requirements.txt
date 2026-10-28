@@ -1,0 +1,5 @@
+# Install inside the target Lambda Python 3.12 / Amazon Linux 2023 environment.
+numpy==2.5.4
+opencv-python-headless==5.0.0.93
+pytesseract==0.3.13
+pypdfium2==5.14.0
