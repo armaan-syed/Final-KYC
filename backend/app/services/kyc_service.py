@@ -120,8 +120,10 @@ class KYCService:
         """Mark an attempt as submitted, create the document row, and enqueue SQS.
 
         The attempt must belong to the customer's case and be in PROCESSING or
-        REUPLOAD_REQUESTED state. After DB commit, exactly one SQS message is
-        enqueued for the OCR worker.
+        REUPLOAD_REQUESTED state. The database rows are committed before the
+        queue send so the worker cannot observe an uncommitted attempt. A
+        retried submit may enqueue a duplicate standard-queue message; the
+        worker serializes result persistence and ignores completed attempts.
         """
         attempt = (
             self.db.query(KYCAttempt)
@@ -161,16 +163,6 @@ class KYCService:
 
         self.db.flush()
 
-        # Enqueue SQS message for the OCR worker
-        enqueue_ocr_job(
-            kyc_attempt_id=attempt.id,
-            kyc_case_id=case.id,
-            customer_id=customer.id,
-            s3_bucket=settings.s3_documents_bucket,
-            s3_key=s3_key,
-            document_type=document_type,
-        )
-
         self._write_audit_event(
             kyc_case_id=case.id,
             attempt_id=attempt.id,
@@ -184,6 +176,18 @@ class KYCService:
         )
 
         self.db.commit()
+
+        # Commit first so an SQS consumer always sees the complete DB record.
+        # If this call fails, the API returns an error and the client may retry;
+        # the worker's attempt-level lock makes duplicate messages safe.
+        enqueue_ocr_job(
+            kyc_attempt_id=attempt.id,
+            kyc_case_id=case.id,
+            customer_id=customer.id,
+            s3_bucket=settings.s3_documents_bucket,
+            s3_key=s3_key,
+            document_type=document_type,
+        )
 
         return SubmitKYCResponse(
             attempt_id=attempt.id,
@@ -235,14 +239,9 @@ class KYCService:
             existing_decision.notes = notes
 
         # Update attempt and case status
-        status_map = {
-            "APPROVED": "APPROVED",
-            "REJECTED": "REJECTED",
-            "REUPLOAD_REQUESTED": "REUPLOAD_REQUESTED",
-        }
-        attempt.status = status_map[decision]
+        attempt.status = decision
         attempt.completed_at = datetime.now(timezone.utc)
-        case.status = status_map[decision]
+        case.status = "REUPLOAD_PENDING" if decision == "REUPLOAD_REQUESTED" else decision
         case.updated_at = datetime.now(timezone.utc)
 
         # Write audit event

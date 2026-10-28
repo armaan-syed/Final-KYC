@@ -95,6 +95,27 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result["date_of_birth"]["raw_value"], "02/01/2000")
         self.assertEqual(result["date_of_birth"]["normalized_value"], "2000-01-02")
         self.assertEqual(result["pan_number"]["normalized_value"], "ABCDE1234F")
+        self.assertIsNone(result["name"]["confidence"])
+
+    def test_pipeline_maps_tesseract_confidence_to_extracted_fields(self):
+        result = extract_document_fields(
+            b"synthetic document bytes",
+            "image/png",
+            "PAN",
+            recognize_text_with_confidence=lambda *_: (
+                "Name: Arjun-Demo\nDOB: 02/01/2000\nABCDE1234F",
+                [
+                    ("Name:", 99.0),
+                    ("Arjun-Demo", 92.0),
+                    ("DOB:", 99.0),
+                    ("02/01/2000", 84.0),
+                    ("ABCDE1234F", 96.0),
+                ],
+            ),
+        )
+        self.assertEqual(result["name"]["confidence"], 92.0)
+        self.assertEqual(result["date_of_birth"]["confidence"], 84.0)
+        self.assertEqual(result["pan_number"]["confidence"], 96.0)
 
     def test_pipeline_rejects_unsupported_type_before_ocr(self):
         def should_not_run(*_):

@@ -22,7 +22,14 @@ def compare_fields(
         customer_value = normalize_value(field_name, customer.get(field_name))
         document_value = normalize_value(field_name, extracted.get(field_name))
         matches = customer_value is not None and customer_value == document_value
-        comparisons.append({"field_name": field_name, "is_match": matches})
+        comparisons.append(
+            {
+                "field_name": field_name,
+                "customer_value": customer_value,
+                "document_value": document_value,
+                "is_match": matches,
+            }
+        )
 
     if not comparisons:
         raise ValueError("at least one comparison field must be configured")

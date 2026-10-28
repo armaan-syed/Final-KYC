@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 
 def _imports():
@@ -62,13 +63,44 @@ def preprocess(image: object) -> object:
     )
 
 
-def extract_text(document_bytes: bytes, content_type: str, document_type: str) -> str:
+def extract_text_with_confidence(
+    document_bytes: bytes, content_type: str, document_type: str
+) -> tuple[str, list[tuple[str, float | None]]]:
+    """Return OCR text plus Tesseract's confidence for each recognized word."""
     _, _, pytesseract = _imports()
     language = "eng+hin" if document_type.upper() == "AADHAAR" else "eng"
     pages: list[str] = []
+    confidence_words: list[tuple[str, float | None]] = []
     for image in render_pages(document_bytes, content_type):
-        pages.append(pytesseract.image_to_string(preprocess(image), lang=language, config="--oem 3 --psm 6"))
-    return "\n".join(pages)
+        result: dict[str, Any] = pytesseract.image_to_data(
+            preprocess(image),
+            lang=language,
+            config="--oem 3 --psm 6",
+            output_type=pytesseract.Output.DICT,
+        )
+        lines: dict[tuple[int, int, int], list[str]] = {}
+        for index, raw_word in enumerate(result.get("text", [])):
+            word = str(raw_word).strip()
+            if not word:
+                continue
+            line_id = (
+                int(result["block_num"][index]),
+                int(result["par_num"][index]),
+                int(result["line_num"][index]),
+            )
+            lines.setdefault(line_id, []).append(word)
+            try:
+                confidence = float(result["conf"][index])
+            except (KeyError, TypeError, ValueError, IndexError):
+                confidence = None
+            confidence_words.append((word, confidence if confidence is None or confidence >= 0 else None))
+        pages.append("\n".join(" ".join(words) for words in lines.values()))
+    return "\n".join(pages), confidence_words
+
+
+def extract_text(document_bytes: bytes, content_type: str, document_type: str) -> str:
+    """Compatibility helper returning only the recognized text."""
+    return extract_text_with_confidence(document_bytes, content_type, document_type)[0]
 
 
 def extract_text_from_file(path: str, document_type: str) -> str:

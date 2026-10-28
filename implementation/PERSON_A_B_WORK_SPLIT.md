@@ -12,10 +12,12 @@ clarifies and redistributes overlapping A/B assignments; it does not change
 Person C's work or any teammate's AWS access. Use this as the working A/B
 ownership split, and confirm the stack boundary together before provisioning.
 
-At the time of writing, no AWS resources have been deployed. The existing SAM
-template contains only the initial storage, CloudFront, and OCR queue/DLQ
-foundation. Use infrastructure as code and integrate each component once; do
-not create duplicate resources manually.
+As of 2026-10-29, no AWS resources have been deployed. The source now defines
+the shared VPC, private network, buckets, CloudFront OAC, standard OCR queue and
+DLQ, conditional OCR worker/layers, alarms, and dashboard. The worker remains
+disabled by default until Person B supplies its database secret and SES sender
+identity. Use infrastructure as code and integrate each component once; do not
+create duplicate resources manually.
 
 ## Ownership
 
@@ -60,24 +62,19 @@ mechanism; provide secret ARNs and non-secret connection metadata in handoff
 notes. Use coordinated SAM/CloudFormation stacks or nested templates; do not
 create parallel console-managed copies of resources already defined in code.
 
-## Shared decisions required before integration
+## Shared contract implementation baseline
 
-Record these decisions in the shared contract sections of the individual plans
-before wiring the backend and worker together:
+The following A/B contract is implemented and locally tested in code. Person B should confirm it before deployment; recording it here does not claim a deployed integration.
 
-1. Confirm a single upload-to-queue path. The current proposal is
-   `POST /kyc/submit` enqueues the job and no S3 event also enqueues it.
-2. Align the backend producer with the standard queue defined in SAM; settle the
-   exact message fields, including how `content_type` reaches the worker.
-3. Define attempt-ID allocation, abandoned upload handling, duplicate submit
-   behavior, and the recovery boundary if the database commit or SQS send fails.
-4. Agree separate case and attempt status values, including re-upload mapping,
-   canonical field names/date formats, and whether `match_percentage` is stored.
-5. Confirm which component sends each notification and whether SMS is sent
-   directly to a phone number or through the configured SNS topic.
+1. **Queue:** `/kyc/submit` is the only producer and the queue is standard. No S3 notification is configured. The six fields are `kyc_attempt_id`, `kyc_case_id`, `customer_id`, `s3_bucket`, `s3_key`, and `document_type`. Object `ContentType` is read from S3.
+2. **Attempt/key lifecycle:** `/kyc/upload-url` allocates and persists the attempt before upload; the server key is `documents/{customer_id}/{attempt_id}/{file_name}`. `/kyc/submit` persists the document row, commits, then enqueues. Abandoned attempts remain PROCESSING.
+3. **Failure boundary:** commit-before-send ensures the worker sees committed data. The worker locks attempt/case rows, persists once, and ignores redelivery after a terminal processing result. There is no transactional outbox: failed SQS send after DB commit can leave PROCESSING until the client retries or an operator repairs it. Repeated S3/OCR failures can also reach the DLQ while the attempt remains `PROCESSING`; B/A/C need to agree on the reviewer/operator recovery transition. Person B must confirm whether to add an outbox or keep an explicit repair path.
+4. **Statuses:** case states are `PENDING`, `PROCESSING`, `AUTO_VERIFIED`, `REVIEW_REQUIRED`, `APPROVED`, `REJECTED`, `REUPLOAD_PENDING`; attempt states are `PROCESSING`, `AUTO_VERIFIED`, `REVIEW_REQUIRED`, `APPROVED`, `REJECTED`, `REUPLOAD_REQUESTED`. Re-upload updates the existing attempt and case separately; the next upload creates a new attempt. Person C should align its status model.
+5. **Comparison:** current code compares Aadhaar name, date of birth, and gender; PAN name and date of birth. Aadhaar/PAN identifiers and Aadhaar address are extracted and stored but not compared. Person A's source describes address as optional/lower-weight, but its confidence/weight rules are unspecified; B/A must agree before adding it. Missing required fields produce `REVIEW_REQUIRED`. Match percentage is written to audit JSON; B's schema has no score column. Tesseract word confidence (0–100) is stored per extracted field when tokens map reliably, otherwise `confidence` stays null.
+6. **Notifications:** worker auto-verification uses the shared notification module to send generic SMS directly to the customer phone and SES email after commit. B's reviewer-decision path sends its existing notifications. The proposed B customer SNS topic is not used by current code; submit/re-upload notification ownership remains open. Provider delivery is best-effort and cannot be atomic with the DB transaction.
+7. **Authentication:** B's FastAPI validates Cognito JWTs. Pool/client outputs and API Gateway authorizer configuration are not present. A's root SAM does not currently wire authorizers into B's separate REST API; settle this boundary with B when pools/API design are available.
 
-Until these are settled, keep the worker/API integration behind local contract
-tests or mocks; do not enable both enqueue paths.
+No S3, queue, database, Cognito, notification, or Lambda resource is deployed. Person B and Person C's existing AWS administrator access remains unchanged.
 
 ## Completion checkpoints
 

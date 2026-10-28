@@ -93,6 +93,23 @@ Parameters:
 Transform: AWS::Serverless-2016-10-31
 
 Resources:
+  SharedNotificationsLayer:
+    Type: AWS::Serverless::LayerVersion
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Shares notification templates and the RDS CA bundle with the OCR worker.
+        must:
+          - Keep RDS hostname verification enabled.
+        mutable: change-with-constraints
+    Properties:
+      LayerName: !Sub 'pramana-${Environment}-shared-notifications'
+      Description: Shared notification implementation and RDS CA trust bundle.
+      ContentUri: ../infra/shared/dist/layer
+      CompatibleRuntimes:
+        - python3.11
+      CompatibleArchitectures:
+        - x86_64
+
   BackendLambdaFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -105,11 +122,11 @@ Resources:
       MemorySize: 512
       Environment:
         Variables:
-          AWS_REGION: !Ref AWS::Region
           RDS_HOST: !Ref RDSHost
           RDS_PORT: !Ref RDSPort
           RDS_DB_NAME: !Ref RDSDbName
           RDS_SECRET_ARN: !Ref DatabaseSecretArn
+          RDS_CA_BUNDLE: /opt/certs/global-bundle.pem
           COGNITO_CUSTOMER_POOL_ID: !Ref CustomerUserPoolId
           COGNITO_REVIEWER_POOL_ID: !Ref ReviewerUserPoolId
           COGNITO_APP_CLIENT_ID: !Ref CustomerAppClientId
@@ -123,6 +140,8 @@ Resources:
         SecurityGroupIds:
           - !Ref BackendLambdaSecurityGroupId
         SubnetIds: !Ref PrivateSubnetIds
+      Layers:
+        - !Ref SharedNotificationsLayer
       Policies:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
@@ -150,7 +169,7 @@ Resources:
                 - s3:PutObject
                 - s3:GetObject
               Resource:
-                - !Sub arn:aws:s3:::${DocumentsBucket}/*
+                - !Sub 'arn:aws:s3:::${DocumentsBucket}/documents/*'
       Events:
         ApiEvent:
           Type: Api
@@ -184,3 +203,6 @@ Outputs:
   BackendLambdaArn:
     Description: Backend Lambda function ARN
     Value: !GetAtt BackendLambdaFunction.Arn
+  ApiName:
+    Description: API Gateway name for shared CloudWatch alarm wiring.
+    Value: !Sub 'pramana-kyc-api-${Environment}'

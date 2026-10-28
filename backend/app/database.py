@@ -1,6 +1,7 @@
 """SQLAlchemy database engine and session factory."""
 
 import json
+import os
 from functools import lru_cache
 
 import boto3
@@ -37,28 +38,48 @@ def _get_database_secret() -> dict[str, str]:
 
 
 def get_database_url() -> URL:
-    """Build a safely escaped PostgreSQL URL from local config or Secrets Manager."""
+    """Build a safely escaped PostgreSQL URL with verified TLS in AWS."""
+    return get_database_config()[0]
+
+
+def get_database_config() -> tuple[URL, dict[str, str]]:
+    """Return a SQLAlchemy URL and connection settings for local/AWS use."""
     secret = _get_database_secret()
     password = secret.get("password")
     if password is None and settings.rds_password is not None:
         password = settings.rds_password.get_secret_value()
     username = secret.get("username", settings.rds_username)
+    host = secret.get("host", settings.rds_host)
+    port = int(secret.get("port", settings.rds_port))
+    database = secret.get("dbname") or secret.get("database") or settings.rds_db_name
     if password is None:
         raise RuntimeError("Database credentials are not configured")
 
-    return URL.create(
+    query: dict[str, str] = {}
+    connect_args: dict[str, str] = {}
+    if settings.rds_secret_arn:
+        ca_bundle = os.environ.get("RDS_CA_BUNDLE", "/opt/certs/global-bundle.pem")
+        if not os.path.isfile(ca_bundle):
+            raise RuntimeError("RDS CA bundle is unavailable in the shared Lambda layer")
+        connect_args["sslmode"] = "verify-full"
+        connect_args["sslrootcert"] = ca_bundle
+
+    url = URL.create(
         drivername="postgresql+psycopg2",
         username=username,
         password=password,
-        host=settings.rds_host,
-        port=settings.rds_port,
-        database=settings.rds_db_name,
-        query={"sslmode": "require"} if settings.rds_secret_arn else {},
+        host=host,
+        port=port,
+        database=database,
+        query=query,
     )
+    return url, connect_args
 
 
+database_url, database_connect_args = get_database_config()
 engine = create_engine(
-    get_database_url(),
+    database_url,
+    connect_args=database_connect_args,
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,

@@ -61,12 +61,15 @@ def test_database_url_escapes_local_credentials(monkeypatch):
     assert url.database == "pramana_kyc"
 
 
-def test_database_url_reads_secrets_manager(monkeypatch):
+def test_database_url_reads_secrets_manager_with_verified_tls(monkeypatch, tmp_path):
     secret_client = MagicMock()
     secret_client.get_secret_value.return_value = {
         "SecretString": '{"username":"db-user","password":"secret-value"}'
     }
     monkeypatch.setattr(database.boto3, "client", MagicMock(return_value=secret_client))
+    ca_bundle = tmp_path / "global-bundle.pem"
+    ca_bundle.write_text("test CA bundle")
+    monkeypatch.setenv("RDS_CA_BUNDLE", str(ca_bundle))
     monkeypatch.setattr(
         database,
         "settings",
@@ -82,10 +85,10 @@ def test_database_url_reads_secrets_manager(monkeypatch):
     )
     database._get_database_secret.cache_clear()
 
-    url = database.get_database_url()
+    url, connect_args = database.get_database_config()
 
     assert url.username == "db-user"
     assert url.password == "secret-value"
-    assert url.query["sslmode"] == "require"
+    assert connect_args == {"sslmode": "verify-full", "sslrootcert": str(ca_bundle)}
     secret_client.get_secret_value.assert_called_once()
     database._get_database_secret.cache_clear()

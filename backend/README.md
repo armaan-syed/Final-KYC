@@ -128,8 +128,9 @@ cd backend
 # 1. Copy env template and fill in local/test values (never use these defaults in AWS)
 cp .env.example .env
 
-# 2. Install dependencies
-pip install -r requirements.txt
+# 2. Install application and test dependencies, then the shared notification package
+pip install -r requirements-dev.txt
+pip install -e ../infra/shared
 
 # 3. Run migrations (requires PostgreSQL)
 alembic upgrade head
@@ -169,13 +170,17 @@ with Person A before integration.
 
 ## Coordination with Person A
 
-Before deploying, obtain these values from Person A:
-- RDS host, port, DB name, and Secrets Manager ARN (never the password in chat)
-- Cognito customer & reviewer pool IDs and app client IDs
-- S3 documents bucket name
-- SQS queue URL
-- SNS topic ARN
-- SES sender email
+Before deploying, coordinate these non-secret outputs and references:
+- From A: VPC ID, private subnet IDs in two Availability Zones, database security
+  group ID, backend/worker security group IDs, document bucket name/ARN, standard
+  SQS queue URL/ARN, and `us-east-1` region.
+- From B: RDS endpoint/port/database name and Secrets Manager ARN, Cognito
+  customer/reviewer pool and app-client IDs, SES sender identity, and API outputs.
+- Confirm whether customer SMS uses an SNS topic or direct phone delivery; the
+  current API/worker notification integration still needs an agreed contract.
+
+The RDS endpoint and secret ARN are supplied by the Person B database stack.
+Never put the database password in this README, chat, or source control.
 
 ## Security
 
