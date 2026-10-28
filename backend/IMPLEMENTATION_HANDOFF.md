@@ -12,7 +12,7 @@
 
 ## A-owned blockers reported by B: resolved
 
-- Person A deployed outbound-only IPv6 egress through an egress-only Internet Gateway, without NAT or interface endpoints. A read-only Lambda in the same private subnets passed service API checks for Secrets Manager, SQS, SNS, both Cognito pools, and SES. SQS/SNS/SES checks used dual-stack endpoints. The temporary stack is still reported by AWS as `DELETE_IN_PROGRESS`; A must verify its cleanup.
+- Person A deployed outbound-only IPv6 egress through an egress-only Internet Gateway, without NAT or interface endpoints. A read-only Lambda in the same private subnets passed service API checks for Secrets Manager, SQS, SNS, both Cognito pools, and SES. SQS/SNS/SES checks used dual-stack endpoints. The Lambda is now absent, but its temporary stack remains `DELETE_IN_PROGRESS` with the IAM role present; a repeated delete request did not finish cleanup.
 - Person A reviewed the API authorization boundary and fixed FastAPI token validation to accept signed Cognito **access tokens**, validating signature, issuer, expiry, `token_use=access`, and app-client `client_id` for the selected customer/reviewer pool. FastAPI applies role guards; API Gateway stays a proxy with no second authorizer.
 - A pulled B's `cdfeedf` commit on `master` before restoring A's work. The updated source/tests/docs will be committed and pushed to the same branch for B to pull.
 
@@ -22,13 +22,14 @@ This connectivity test proves network egress from a temporary function; it does 
 
 - **Migration/catalog:** Alembic has not been applied to RDS; the live schema/catalog has not been verified. The developer workstation has no route to private RDS. Apply it from a controlled, short-lived runner inside the approved VPC using the RDS secret; do not put the secret in source control or logs.
 - **API deployment:** no B-owned API change set was available for A review. Prepare and share the actual change set, then wait for A's resource/cost/replacement review before execution. Do not deploy the component template as a parallel shared API/network stack.
-- **Email/SMS:** no SES sender identity is verified and production access is pending. Verify the sender and check the SNS account SMS spend limit before enabling customer notifications.
+- **Email/SMS:** live SES inspection returned no email identities. Verify a sender and obtain production access. The SNS SMS-attributes read failed because this AWS account has no subscription for the service; enable/access the service and confirm the spend limit before customer SMS is enabled.
 - **Integration:** after migration and API deployment, verify API-to-RDS, SQS enqueue, customer/reviewer authorization, reviewer decision/audit, and notification behavior. A should enable the OCR worker only after the schema and SES prerequisites are ready.
 
 ## Current source and test status
 
-- Local backend test suite after integrating B's push and A's changes: **33 passed** (34 deprecation warnings).
-- OCR/worker suite: **33 passed, 1 skipped**. The skipped test requires a dedicated PostgreSQL database migrated to B's schema; an earlier disposable migrated-PostgreSQL worker check passed before this pull.
+- Re-run on `master` at `2b9f5ea`: backend suite **33 passed** (34 deprecation warnings); OCR/worker suite **33 passed, 1 skipped** in the standard run; frontend suite **2 passed** and static production build passed.
+- The opt-in worker/PostgreSQL integration test also passed (**1 passed**) after applying the actual Alembic migration to a disposable PostgreSQL 16 database; the disposable container was removed. This does not verify the live RDS catalog or connectivity from B's Lambda.
+- Local static HTTP checks returned 200 for all 10 exported routes. `npm audit --omit=dev` reports 3 findings (1 critical, 2 high); Person C should assess the compatible fix before frontend release.
 - AWS CloudFormation validation and source-level SAM/lint checks are recorded in `implementation/PERSON_A_IMPLEMENTATION_PLAN.md`. These do not substitute for the pending B change-set review or live API/database integration.
 
 No database password, Cognito user credentials, tokens, real identity documents, or customer data are recorded in this handoff.

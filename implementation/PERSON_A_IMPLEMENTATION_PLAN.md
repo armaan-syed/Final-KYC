@@ -47,7 +47,9 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 - [x] Fixed B/A integration defects in the migration: JSONB argument spelling and database UUID server defaults required for direct worker inserts. Added the VPC ENI execution policy to B's VPC-attached Lambda role.
 - [x] Ran a disposable PostgreSQL integration check using the current migration DDL and worker repository: one transaction persisted extraction, comparisons, status, decision, and audit; redelivery created no duplicate rows. The host's PostgreSQL build does not include `pgcrypto`, so only that extension statement was omitted from the temporary test copy.
 - [x] Mapped Tesseract word confidence to parsed fields when their OCR tokens match, persisted that value in B's nullable `confidence` column, and retained `NULL` if a reliable token mapping is unavailable.
-- [x] Current combined-checkout tests after pulling B's `cdfeedf`: backend `33 passed` (34 dependency deprecation warnings); OCR/worker `33 passed, 1 skipped` because no dedicated migrated PostgreSQL test DB URL is configured. A prior run against a disposable migrated PostgreSQL database passed. Frontend `2 passed`; static production build completed and emitted distinct customer `/dashboard` and reviewer `/reviewer/dashboard` routes.
+- [x] Re-ran the combined-checkout suites on `master` at `2b9f5ea`: backend `33 passed` (34 dependency deprecation warnings); OCR/worker `33 passed, 1 skipped` in the default run; frontend `2 passed`; Next.js static production build passed.
+- [x] Re-ran the optional database integration against an isolated PostgreSQL 16 container: applied the repository's actual Alembic `upgrade head`, ran the worker persistence/idempotency integration test (`1 passed`), and removed the disposable database container. This verifies the current migration and worker repository locally, not the live RDS catalog.
+- [x] Served the generated static export locally and checked 10 customer/reviewer routes, including the query-string case-detail route; all returned HTTP 200.
 - [x] Expanded the shared SAM template with the private VPC, two private subnets, private buckets, conditional CloudFront OAC, encrypted standard queue/DLQ, conditional OCR worker/layers, least-privilege role, alarms, and operations dashboard. NAT is now disabled by default. B's backend template accepts A's network/bucket/queue outputs, loads DB credentials from Secrets Manager with verified TLS, and runs inside the VPC.
 - [x] Parsed both current SAM templates locally and checked `Ref`, `GetAtt`, and `Sub` names: 43 root resources and 3 backend resources, with no unresolved local references.
 - [x] Ran `cfn-lint` 1.58.0 on both current templates successfully, excluding W1030 for caller-supplied ARN string parameters.
@@ -69,8 +71,8 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 - [x] Updated backend Cognito verification to validate signed access tokens against issuer, expiry, token use, and selected pool client ID; removed duplicate backend login/refresh/logout routes so Amplify owns sessions. Added token and auth-contract tests.
 - [x] Aligned B/C integration source: standard Cognito `gender`, API-backed registration/confirmation, actual S3 size/type validation, SNS direct-phone IAM scope, and explicit third-retry review transition.
 - [x] Deployed the no-NAT IPv6 path using two reviewed CloudFormation change sets without replacing the existing subnets. Verified the VPC `/56`, both subnet `/64`s, active egress-only routes, TLS-only IPv6 Lambda egress, and security-group drift state.
-- [x] Invoked a temporary read-only Lambda in the private subnets; Secrets Manager, SQS, SNS, Cognito, and SES API checks succeeded. Temporary stack deletion was requested and remains in progress until AWS confirms cleanup.
-- [x] Fast-forwarded to the latest pushed `master` (`fdb1c89`, Person C merge). The remote `personb` tip was already an ancestor of `master`; there was no newer B commit to merge.
+- [x] Invoked a temporary read-only Lambda in the private subnets; Secrets Manager, SQS, SNS, Cognito, and SES API checks succeeded. The function is now absent, but CloudFormation still reports its temporary stack as `DELETE_IN_PROGRESS` and retains the probe IAM role; a repeated delete request did not finish cleanup.
+- [x] Rechecked and fast-forwarded/pushed the integrated source to `master` at `2b9f5ea`; a fresh fetch found no newer commit.
 - [ ] Complete CloudFront after AWS account verification allows distribution creation; `EnableCloudFront` remains false.
 - [ ] B must apply Alembic migration and verify the live database catalog; provide a reviewed API change set and deploy the backend/API. No B-owned API change set exists yet.
 - [ ] B must verify an SES sender and production access, and set/check the account SMS spending limit before customer notifications are enabled.
@@ -78,6 +80,16 @@ Deliver a deployable, least-privilege AWS stack and a working OCR worker that ac
 - [ ] C must finish the frontend contract/status work, resolve current frontend dependency audit findings, build the static site, and deploy when CloudFront/account verification permits.
 - [ ] Review B's actual change set before deployment; do not deploy B-owned resources from a template alone.
 - [ ] Run deployed upload → SQS → OCR → RDS → API/UI → reviewer → audit/notification checks after B/C deployments; finish the output handoff.
+
+#### Revalidation snapshot (2026-10-29, `2b9f5ea`)
+
+- `backend/tests`: **33 passed**, 34 dependency deprecation warnings.
+- `infra/ocr/tests`: **33 passed, 1 skipped** in the standard run; the skipped opt-in test then passed separately (`1 passed`) against the actual Alembic schema on a disposable PostgreSQL 16 container.
+- `frontend`: **2 passed**; `npm run build` passed and emitted the customer/reviewer static routes; local static HTTP checks returned **200 for all 10 routes**.
+- Template checks: `cfn-lint -i W1030` passed for the root, backend, and database templates; root `sam validate`, backend `sam validate --lint`, and AWS CloudFormation validation of the backend template passed.
+- `npm audit --omit=dev` still reports **3 production dependency findings** (Next.js critical; nested PostCSS and Zod high). This is assigned to Person C to review for the static-export build before release.
+- Live AWS check used IAM user `pramana-admin` in account `682197558335`, region `us-east-1`: RDS is `available`, encrypted, and not public; the foundation has `EnableOCRWorker=false` and `EnableCloudFront=false`; no NAT gateway or CloudFront distribution exists; the only VPC endpoint is the S3 gateway endpoint; there is no deployed API Gateway API or Lambda function. No SES email identities are verified. The SNS SMS-attributes query is blocked because this account has no subscription for that service.
+- The actual deployed RDS migration/catalog, API-to-RDS/SQS integration, OCR worker invocation, customer/reviewer browser flow, reviewer audit/decision, and real notifications remain unverified because their B-owned deployment/configuration prerequisites are not ready. Do not label the application end-to-end complete yet.
 
 #### AWS foundation deployment and no-NAT update (2026-10-29)
 

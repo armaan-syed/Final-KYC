@@ -43,9 +43,10 @@ file.
   other role's dependency.
 - Person A deployed outbound-only IPv6 egress without NAT or interface
   endpoints. A temporary read-only Lambda in the private subnets successfully
-  called Cognito APIs and fetched required public AWS service APIs. The probe
-  stack is being deleted. This proves the network route, not the deployed API
-  Lambda integration.
+  called Cognito APIs and required AWS service APIs. The function is absent,
+  but AWS still reports the probe's CloudFormation stack as
+  `DELETE_IN_PROGRESS` with its IAM role present. This proves the network route,
+  not the deployed API Lambda integration.
 - The pool resources pre-existed outside the current CloudFormation stacks.
   Their configuration was inspected and updated in place; do not create
   replacement pools. Future resource import/stack ownership should be coordinated

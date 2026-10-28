@@ -10,7 +10,7 @@ Person A selected the remaining cross-person decisions at the project owner's di
 - A's `pramana-dev-foundation` is deployed in `us-east-1`; NAT is absent, OCR and CloudFront are disabled, and the free S3 gateway endpoint remains.
 - B's private RDS instance and the customer/reviewer Cognito pools and clients exist. B has not applied the Alembic migration or verified the database catalog.
 - There is no deployed backend API/Lambda, OCR worker, verified SES sender, or CloudFront distribution. B has not supplied an API deployment change set for review.
-- A's egress-only IPv6 path is deployed and was verified by a read-only Lambda probe from the private subnets to Secrets Manager, SQS, SNS, Cognito, and SES. The temporary probe stack is being deleted; cleanup must be checked before it is reported removed.
+- A's egress-only IPv6 path is deployed and was verified by a read-only Lambda probe from the private subnets to Secrets Manager, SQS, SNS, Cognito, and SES. The probe function is absent; its CloudFormation stack remains `DELETE_IN_PROGRESS` with the IAM role present despite a repeated delete request.
 - A reviewed B's authorization boundary and changed the local implementation to validate Cognito access tokens at FastAPI. This review and network path address the A-owned blockers B reported; B can proceed with migration and API deployment preparation.
 
 ## Ownership
@@ -41,7 +41,7 @@ Person A selected the remaining cross-person decisions at the project owner's di
 
 - Customer Cognito pool `us-east-1_8Q9onMEne`, client `1rtg8t1nbggjsf2i0d8g7jqqov`; reviewer pool `us-east-1_IQzz0ktCu`, client `5fh52722t9o0le48pieqavtcv0`. More detail: [`../backend/COGNITO_OUTPUTS.md`](../backend/COGNITO_OUTPUTS.md). These are public identifiers, not secrets.
 - RDS endpoint `pramana-dev-database-db.citogy2m6wxr.us-east-1.rds.amazonaws.com`, port `5432`, database `pramana_kyc`; secret ARN `arn:aws:secretsmanager:us-east-1:682197558335:secret:rds!db-3d281b6c-5013-4ee5-abc6-2970ac631d50-Cb3oaQ`. Never publish the secret value.
-- Pending: applied and verified Alembic migration, backend API URL/Lambda, SES sender identity and production access, and reviewed B-owned API change set.
+- Pending: applied and verified live Alembic migration/catalog, backend API URL/Lambda, SES sender identity and production access, SNS SMS service subscription/spend-limit check, and reviewed B-owned API change set. The live account currently has no SES identities, and the SMS attributes call fails because the account has no subscription for that service.
 - B reports the customer pool's required custom attributes are configured; `gender` is the standard Cognito attribute. Live read shows SRP is enabled on both clients; customer password auth is also enabled, reviewer password auth is not. The frontend uses Amplify SRP.
 
 ## Shared behavior
