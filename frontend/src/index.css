@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900 font-sans antialiased;
+  }
+}
+
+/* Custom banking transitions & animations */
+.transition-banking {
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gradient-header {
+  background: linear-gradient(135deg, #07101E 0%, #002B49 50%, #0C1A30 100%);
+}
+
+.gradient-accent {
+  background: linear-gradient(135deg, #002B49 0%, #1A73E8 100%);
+}
+
+.gradient-card-top {
+  background: linear-gradient(90deg, #1A73E8 0%, #00A3E0 100%);
+}

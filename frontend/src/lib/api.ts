@@ -1,9 +1,11 @@
-import axios, { AxiosError } from 'axios';
+import axios from 'axios';
 import { getAccessToken, isMockEnabled } from './auth';
 import {
   RegisterRequest,
   RegisterResponse,
   ConfirmRequest,
+  LoginRequest,
+  LoginResponse,
   CustomerProfile,
   CustomerProfileUpdate,
   KYCStatusResponse,
@@ -26,7 +28,7 @@ import {
   mockCaseDetailMap,
 } from '@/mocks/mockData';
 
-const baseURL = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://api.example.com';
+const baseURL = import.meta.env.VITE_API_BASE_URL || 'https://api.example.com';
 
 const apiClient = axios.create({
   baseURL,
@@ -37,10 +39,11 @@ const apiClient = axios.create({
 
 // Interceptor to attach Bearer token on protected calls
 apiClient.interceptors.request.use(async (config) => {
-  // Only skip token for public auth routes
   const isPublicAuth =
+    config.url?.includes('/auth/login') ||
     config.url?.includes('/auth/register') ||
-    config.url?.includes('/auth/confirm');
+    config.url?.includes('/auth/confirm') ||
+    config.url?.includes('/auth/refresh');
 
   if (!isPublicAuth) {
     const token = await getAccessToken();
@@ -73,7 +76,7 @@ export const apiRegister = async (data: RegisterRequest): Promise<RegisterRespon
   if (isMockEnabled()) {
     return {
       message: 'Registration successful. Please verify your email with the verification code.',
-      cognito_sub: 'mock-sub-' + Math.random().toString(36).substring(7),
+      cognito_sub: 'mock-cust-' + Math.random().toString(36).substring(7),
     };
   }
   const res = await apiClient.post<RegisterResponse>('/auth/register', data);
@@ -85,6 +88,26 @@ export const apiConfirm = async (data: ConfirmRequest): Promise<{ message: strin
     return { message: 'Account confirmed successfully. Please log in.' };
   }
   const res = await apiClient.post<{ message: string }>('/auth/confirm', data);
+  return res.data;
+};
+
+export const apiLogin = async (data: LoginRequest): Promise<LoginResponse> => {
+  if (isMockEnabled()) {
+    return {
+      access_token: 'mock-access-token',
+      id_token: 'mock-id-token',
+      refresh_token: 'mock-refresh-token',
+      token_type: 'Bearer',
+      expires_in: 3600,
+      user: {
+        sub: 'sub-cust-001',
+        email: data.email,
+        name: 'ARMAAN SYED',
+        role: 'customer',
+      },
+    };
+  }
+  const res = await apiClient.post<LoginResponse>('/auth/login', data);
   return res.data;
 };
 
@@ -138,19 +161,17 @@ export const apiGetUploadUrl = async (data: UploadUrlRequest): Promise<UploadUrl
   return res.data;
 };
 
-// Direct Presigned Upload (Browser -> S3 directly)
 export const directUploadToS3 = async (
   uploadUrl: string,
   file: File,
   onProgress?: (percent: number) => void
 ): Promise<void> => {
   if (isMockEnabled() && uploadUrl.includes('httpbin.org')) {
-    // Simulate real network upload progression
     if (onProgress) {
-      onProgress(30);
-      await new Promise((r) => setTimeout(r, 200));
-      onProgress(70);
-      await new Promise((r) => setTimeout(r, 200));
+      onProgress(35);
+      await new Promise((r) => setTimeout(r, 180));
+      onProgress(75);
+      await new Promise((r) => setTimeout(r, 180));
       onProgress(100);
     }
     return;
