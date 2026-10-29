@@ -1,24 +1,14 @@
 // Pramāṇa KYC - Canonical TypeScript Definitions matching FastAPI Schemas exactly
 
-export type CaseKYCStatus =
+export type KYCStatus =
   | 'PENDING'
   | 'PROCESSING'
   | 'AUTO_VERIFIED'
   | 'REVIEW_REQUIRED'
   | 'APPROVED'
   | 'REJECTED'
-  | 'REUPLOAD_PENDING';
-
-export type AttemptKYCStatus =
-  | 'PROCESSING'
-  | 'AUTO_VERIFIED'
-  | 'REVIEW_REQUIRED'
-  | 'APPROVED'
-  | 'REJECTED'
+  | 'REUPLOAD_PENDING'
   | 'REUPLOAD_REQUESTED';
-
-// Shared badge accepts the union; API response contracts use the specific type.
-export type KYCStatus = CaseKYCStatus | AttemptKYCStatus;
 
 export type DocumentType = 'AADHAAR' | 'PAN';
 
@@ -61,7 +51,7 @@ export interface FieldComparison {
 export interface KYCAttempt {
   attempt_number: number;
   document_type: DocumentType;
-  status: AttemptKYCStatus;
+  status: KYCStatus;
   submitted_at: string;
   completed_at?: string | null;
   field_comparisons?: FieldComparison[];
@@ -71,7 +61,7 @@ export interface KYCAttempt {
 
 export interface KYCStatusResponse {
   kyc_case_id: string;
-  status: CaseKYCStatus;
+  status: KYCStatus;
   latest_attempt?: KYCAttempt | null;
   rejection_reason?: string | null;
 }
@@ -98,7 +88,7 @@ export interface KYCSubmitRequest {
 export interface KYCSubmitResponse {
   attempt_id: string;
   attempt_number: number;
-  status: AttemptKYCStatus;
+  status: KYCStatus;
   message: string;
 }
 
@@ -135,7 +125,7 @@ export interface AuditEvent {
 
 export interface CaseDetail {
   kyc_case_id: string;
-  status: CaseKYCStatus;
+  status: KYCStatus;
   customer: {
     full_name: string;
     date_of_birth: string;
@@ -154,7 +144,7 @@ export interface CaseDetail {
   attempt_history: Array<{
     attempt_number: number;
     document_type?: DocumentType;
-    status: AttemptKYCStatus;
+    status: KYCStatus;
     submitted_at: string;
     completed_at?: string | null;
     rejection_reason?: string | null;
@@ -170,7 +160,7 @@ export interface DecisionRequest {
 export interface DecisionResponse {
   message: string;
   kyc_case_id: string;
-  status: CaseKYCStatus;
+  status: KYCStatus;
 }
 
 export interface RegisterRequest {
@@ -189,7 +179,7 @@ export interface RegisterRequest {
 
 export interface RegisterResponse {
   message: string;
-  cognito_sub: string;
+  customer_id: string;
 }
 
 export interface ConfirmRequest {

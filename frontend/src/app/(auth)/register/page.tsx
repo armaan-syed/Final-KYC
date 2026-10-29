@@ -7,6 +7,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { ShieldCheck, UserPlus } from 'lucide-react';
+import { registerCustomer } from '@/lib/auth';
 import { apiRegister } from '@/lib/api';
 import { ErrorAlert } from '@/components/ui/Alerts';
 
@@ -54,8 +55,8 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       const { confirmPassword, ...payload } = data;
-      // The backend creates the customer row after Cognito confirmation.
-      await apiRegister(payload);
+      // Register with Cognito & Backend API
+      await registerCustomer(payload);
       router.push(`/confirm?email=${encodeURIComponent(payload.email)}`);
     } catch (err: any) {
       setErrorMessage(err?.message || 'Failed to complete registration.');

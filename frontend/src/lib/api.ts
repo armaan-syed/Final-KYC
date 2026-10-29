@@ -4,6 +4,8 @@ import {
   RegisterRequest,
   RegisterResponse,
   ConfirmRequest,
+  LoginRequest,
+  LoginResponse,
   CustomerProfile,
   CustomerProfileUpdate,
   KYCStatusResponse,
@@ -39,8 +41,10 @@ const apiClient = axios.create({
 apiClient.interceptors.request.use(async (config) => {
   // Only skip token for public auth routes
   const isPublicAuth =
+    config.url?.includes('/auth/login') ||
     config.url?.includes('/auth/register') ||
-    config.url?.includes('/auth/confirm');
+    config.url?.includes('/auth/confirm') ||
+    config.url?.includes('/auth/refresh');
 
   if (!isPublicAuth) {
     const token = await getAccessToken();
@@ -73,7 +77,7 @@ export const apiRegister = async (data: RegisterRequest): Promise<RegisterRespon
   if (isMockEnabled()) {
     return {
       message: 'Registration successful. Please verify your email with the verification code.',
-      cognito_sub: 'mock-sub-' + Math.random().toString(36).substring(7),
+      customer_id: 'mock-cust-' + Math.random().toString(36).substring(7),
     };
   }
   const res = await apiClient.post<RegisterResponse>('/auth/register', data);
@@ -85,6 +89,26 @@ export const apiConfirm = async (data: ConfirmRequest): Promise<{ message: strin
     return { message: 'Account confirmed successfully. Please log in.' };
   }
   const res = await apiClient.post<{ message: string }>('/auth/confirm', data);
+  return res.data;
+};
+
+export const apiLogin = async (data: LoginRequest): Promise<LoginResponse> => {
+  if (isMockEnabled()) {
+    return {
+      access_token: 'mock-access-token',
+      id_token: 'mock-id-token',
+      refresh_token: 'mock-refresh-token',
+      token_type: 'Bearer',
+      expires_in: 3600,
+      user: {
+        sub: 'sub-cust-001',
+        email: data.email,
+        name: 'ARMAAN SYED',
+        role: 'customer',
+      },
+    };
+  }
+  const res = await apiClient.post<LoginResponse>('/auth/login', data);
   return res.data;
 };
 
