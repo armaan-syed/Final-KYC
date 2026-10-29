@@ -6,7 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { ShieldCheck, MailCheck } from 'lucide-react';
-import { confirmCustomerEmail } from '@/lib/auth';
+import { apiConfirm } from '@/lib/api';
 import { ErrorAlert, SuccessAlert } from '@/components/ui/Alerts';
 
 const confirmSchema = z.object({
@@ -41,7 +41,7 @@ function ConfirmForm() {
     setErrorMessage(null);
     setLoading(true);
     try {
-      await confirmCustomerEmail(data.email, data.code);
+      await apiConfirm({ email: data.email, confirmation_code: data.code });
       setSuccessMessage('Account confirmed successfully! Redirecting to login...');
       setTimeout(() => {
         router.push('/login');

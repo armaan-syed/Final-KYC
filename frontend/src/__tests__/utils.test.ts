@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatDate, formatFieldLabel } from '../src/lib/utils';
+import { formatDate, formatFieldLabel } from '../lib/utils';
 
 describe('Frontend Utils', () => {
   it('formats date to readable format', () => {
