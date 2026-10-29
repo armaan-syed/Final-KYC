@@ -8,9 +8,9 @@ Person A selected the remaining cross-person decisions at the project owner's di
 ## Current deployment snapshot
 
 - A's `pramana-dev-foundation` is deployed in `us-east-1`; NAT is absent, OCR and CloudFront are disabled, and the free S3 gateway endpoint remains.
-- B's private RDS instance and the customer/reviewer Cognito pools and clients exist. B has not applied the Alembic migration or verified the database catalog.
+- B's private RDS instance and the customer/reviewer Cognito pools and clients exist. A's read-only check reached PostgreSQL over verified TLS and found `public` empty with no Alembic revision; B still needs to apply and verify the current migration.
 - There is no deployed backend API/Lambda, OCR worker, verified SES sender, or CloudFront distribution. B has not supplied an API deployment change set for review.
-- A's egress-only IPv6 path is deployed and was verified by a read-only Lambda probe from the private subnets to Secrets Manager, SQS, SNS, Cognito, and SES. AWS has now fully deleted the probe stack, function, and IAM role.
+- A's egress-only IPv6 path is deployed. Temporary private Lambda probes verified Secrets Manager, SQS, SNS, Cognito, SES, and PostgreSQL TLS connectivity without NAT or interface endpoints. The database probe ZIPs and Lambda function are gone; CloudFormation is still waiting for AWS to detach the Lambda-managed ENIs before removing its temporary role and log group.
 - A reviewed B's authorization boundary and changed the local implementation to validate Cognito access tokens at FastAPI. This review and network path address the A-owned blockers B reported; B can proceed with migration and API deployment preparation.
 
 ## Ownership
@@ -35,7 +35,7 @@ Person A selected the remaining cross-person decisions at the project owner's di
 - Document bucket: `pramana-dev-foundation-documentbucket-r77xgfetn3cj`.
 - OCR queue URL: `https://sqs.us-east-1.amazonaws.com/682197558335/pramana-dev-foundation-OCRQueue-LrTO9SM80mE2`; ARN: `arn:aws:sqs:us-east-1:682197558335:pramana-dev-foundation-OCRQueue-LrTO9SM80mE2`.
 - Shared notification/RDS CA layer ARN: `arn:aws:lambda:us-east-1:682197558335:layer:pramana-dev-shared-notifications:2`.
-- On 2026-10-29, a temporary read-only Lambda in the shared private subnets successfully called Secrets Manager, SQS, SNS, both Cognito pools, and SES. B's backend template sets `Ipv6AllowedForDualStack: true` and uses dual-stack endpoints for SQS/SNS/SES.
+- On 2026-10-29, temporary read-only Lambda probes in the shared private subnets successfully called Secrets Manager, SQS, SNS, both Cognito pools, and SES, then retrieved the RDS-managed credentials and connected to PostgreSQL with `sslmode=verify-full`. RDS is reachable from the backend SG; no tables or Alembic revision exist yet. B's backend template sets `Ipv6AllowedForDualStack: true` and uses dual-stack endpoints for SQS/SNS/SES.
 
 ## B-to-A/C handoff
 
@@ -43,6 +43,13 @@ Person A selected the remaining cross-person decisions at the project owner's di
 - RDS endpoint `pramana-dev-database-db.citogy2m6wxr.us-east-1.rds.amazonaws.com`, port `5432`, database `pramana_kyc`; secret ARN `arn:aws:secretsmanager:us-east-1:682197558335:secret:rds!db-3d281b6c-5013-4ee5-abc6-2970ac631d50-Cb3oaQ`. Never publish the secret value.
 - Pending: applied and verified live Alembic migration/catalog, backend API URL/Lambda, SES sender identity and production access, SNS SMS service subscription/spend-limit check, and reviewed B-owned API change set. The live account currently has no SES identities, and the SMS attributes call fails because the account has no subscription for that service.
 - B reports the customer pool's required custom attributes are configured; `gender` is the standard Cognito attribute. Live read shows SRP is enabled on both clients; customer password auth is also enabled, reviewer password auth is not. The frontend uses Amplify SRP.
+
+## Migration runner verification for Person B (2026-10-29)
+
+- A's read-only probe confirmed the private Lambda path can retrieve the RDS-managed secret and connect to `pramana-dev-database-db.citogy2m6wxr.us-east-1.rds.amazonaws.com:5432/pramana_kyc` using the existing backend SG and the shared RDS CA. The secret contains only `username` and `password`; pass the RDS host and database name separately. The query observed `alembic_revision=null` and no public tables. It performed no writes.
+- CloudTrail shows B's first runner update failed in `Failed` state with `InsufficientRolePermissions`; the VPC execution policy was attached afterward. Later creates returned `Pending`/`Creating` and the latest function was deleted before it became `Active`. The runner therefore was not ready for invocation; the migration was not run.
+- B's next run: attach `AWSLambdaVPCAccessExecutionRole` before create/update; use both existing private subnets and backend SG; pass the live DB endpoint/name separately from the secret; retain PostgreSQL TLS verification; wait for Lambda `State=Active` and `LastUpdateStatus=Successful` before invoking the DATE-based migration artifact; then verify the migration revision and expected tables. The [Lambda state reference](https://docs.aws.amazon.com/lambda/latest/dg/functions-states.html) documents that `Pending` functions cannot be invoked.
+- This resolves the A-owned networking/connectivity question. It does not apply B's migration or validate B's schema; no DB change was made.
 
 ## Shared behavior
 
