@@ -89,7 +89,7 @@ export async function registerCustomer(data: RegisterRequest) {
       userAttributes: {
         email: data.email,
         phone_number: data.phone_number,
-        name: data.full_name,
+        given_name: data.full_name,
         gender: data.gender,
         'custom:date_of_birth': data.date_of_birth,
         'custom:address_line1': data.address_line1,
