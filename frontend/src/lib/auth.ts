@@ -1,10 +1,12 @@
 import { Amplify } from 'aws-amplify';
 import {
   signIn as amplifySignIn,
+  signUp as amplifySignUp,
+  confirmSignUp as amplifyConfirmSignUp,
   signOut as amplifySignOut,
   fetchAuthSession,
 } from 'aws-amplify/auth';
-import { LoginRequest, LoginResponse } from '@/types';
+import { RegisterRequest, LoginRequest, LoginResponse } from '@/types';
 
 // Detect whether to use client-side mock adapter
 export const isMockEnabled = (): boolean => {
@@ -12,19 +14,19 @@ export const isMockEnabled = (): boolean => {
     const localOverride = localStorage.getItem('pramana_use_mocks');
     if (localOverride !== null) return localOverride === 'true';
   }
-  return process.env.NEXT_PUBLIC_USE_MOCKS === 'true';
+  return import.meta.env.VITE_USE_MOCKS === 'true';
 };
 
 export const configureAmplify = (role: 'customer' | 'reviewer' = 'customer') => {
   const userPoolId =
     role === 'reviewer'
-      ? process.env.NEXT_PUBLIC_COGNITO_REVIEWER_USER_POOL_ID
-      : process.env.NEXT_PUBLIC_COGNITO_CUSTOMER_USER_POOL_ID;
+      ? import.meta.env.VITE_COGNITO_REVIEWER_USER_POOL_ID || 'us-east-1_IQzz0ktCu'
+      : import.meta.env.VITE_COGNITO_CUSTOMER_USER_POOL_ID || 'us-east-1_8Q9onMEne';
 
   const clientId =
     role === 'reviewer'
-      ? process.env.NEXT_PUBLIC_COGNITO_REVIEWER_CLIENT_ID
-      : process.env.NEXT_PUBLIC_COGNITO_CUSTOMER_CLIENT_ID;
+      ? import.meta.env.VITE_COGNITO_REVIEWER_CLIENT_ID || '5fh52722t9o0le48pieqavtcv0'
+      : import.meta.env.VITE_COGNITO_CUSTOMER_CLIENT_ID || '1rtg8t1nbggjsf2i0d8g7jqqov';
 
   if (userPoolId && clientId) {
     try {
@@ -38,7 +40,7 @@ export const configureAmplify = (role: 'customer' | 'reviewer' = 'customer') => 
         },
       });
     } catch {
-      // Amplify configure might throw if already configured or during SSR
+      // Ignore if already configured
     }
   }
 };
@@ -67,6 +69,56 @@ export async function getCurrentUserRole(): Promise<'customer' | 'reviewer' | nu
   return null;
 }
 
+export async function registerCustomer(data: RegisterRequest) {
+  if (isMockEnabled()) {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('pramana_pending_reg_email', data.email);
+    }
+    return {
+      message: 'Registration successful. Please verify your email with the verification code.',
+      customer_id: 'mock-cust-uuid-' + Date.now(),
+    };
+  }
+
+  // Real Amplify sign-up against Customer User Pool (us-east-1_8Q9onMEne)
+  configureAmplify('customer');
+  const signUpResult = await amplifySignUp({
+    username: data.email,
+    password: data.password,
+    options: {
+      userAttributes: {
+        email: data.email,
+        phone_number: data.phone_number,
+        name: data.full_name,
+        gender: data.gender,
+        'custom:date_of_birth': data.date_of_birth,
+        'custom:address_line1': data.address_line1,
+        'custom:address_line2': data.address_line2 || '',
+        'custom:city': data.city,
+        'custom:state': data.state,
+        'custom:pincode': data.pincode,
+      },
+    },
+  });
+
+  return {
+    message: 'Registration initiated. Verification code sent.',
+    customer_id: signUpResult.userId || '',
+  };
+}
+
+export async function confirmCustomerEmail(email: string, code: string) {
+  if (isMockEnabled()) {
+    return { message: 'Email confirmed successfully.' };
+  }
+
+  configureAmplify('customer');
+  return await amplifyConfirmSignUp({
+    username: email,
+    confirmationCode: code,
+  });
+}
+
 export async function loginUser(req: LoginRequest, role: 'customer' | 'reviewer' = 'customer'): Promise<LoginResponse> {
   if (isMockEnabled()) {
     const mockRes: LoginResponse = {
@@ -78,7 +130,7 @@ export async function loginUser(req: LoginRequest, role: 'customer' | 'reviewer'
       user: {
         sub: `sub-${role}-001`,
         email: req.email,
-        name: role === 'customer' ? 'ARMAAN SYED' : 'SENIOR REVIEWER',
+        name: role === 'customer' ? 'ARMAAN SYED' : 'SENIOR AUDIT REVIEWER',
         role,
       },
     };
@@ -93,7 +145,7 @@ export async function loginUser(req: LoginRequest, role: 'customer' | 'reviewer'
   }
 
   configureAmplify(role);
-  const signInOutput = await amplifySignIn({
+  await amplifySignIn({
     username: req.email,
     password: req.password,
   });
@@ -136,7 +188,7 @@ export async function logoutUser() {
     try {
       await amplifySignOut();
     } catch {
-      // Ignore signOut if already unauthenticated
+      // Ignore if unauthenticated
     }
   }
 }
