@@ -27,7 +27,7 @@ def upgrade() -> None:
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False, server_default=sa.text("gen_random_uuid()")),
         sa.Column("cognito_sub", sa.String(length=255), nullable=False),
         sa.Column("full_name", sa.String(length=255), nullable=False),
-        sa.Column("date_of_birth", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("date_of_birth", sa.Date(), nullable=False),
         sa.Column("gender", sa.String(length=20), nullable=False),
         sa.Column("phone_number", sa.String(length=20), nullable=False),
         sa.Column("email", sa.String(length=255), nullable=False),

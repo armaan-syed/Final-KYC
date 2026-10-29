@@ -1,11 +1,12 @@
 # Person B backend and deployment checkpoint
 
-**Updated:** 2026-10-29 after B's `master` push and A integration review.
+**Updated:** 2026-10-29 after migration-runner diagnosis and DOB schema correction.
 
 ## Implemented in source
 
 - FastAPI configuration, customer/KYC/reviewer routes, SQLAlchemy models, initial Alembic migration, S3 presigned upload/download, SQS producer, transactional reviewer decisions/audit, and SNS/SES notification adapter.
 - Registration validates ISO date of birth, writes the configured Cognito attributes, uses standard `gender`, and creates the PostgreSQL customer row after confirmation. Amplify owns sign-in, session refresh, and sign-out; backend `/auth/login`, `/auth/refresh`, and `/auth/logout` routes are removed by the shared contract.
+- Customer DOB is a calendar date in the ORM and initial Alembic migration (`DATE`/SQLAlchemy `Date`); a focused model test asserts the stored type. This corrects a mismatch found in the checked-in source before running the live migration.
 - B's Cognito outputs and current public configuration are recorded in [`COGNITO_OUTPUTS.md`](COGNITO_OUTPUTS.md). Both pools/clients exist, and reviewer self-registration is disabled.
 - Private RDS is deployed as `pramana-dev-database`: PostgreSQL 18.3, `db.t4g.micro`, 20 GiB encrypted storage, single-AZ, non-public, and one-day automated backup retention. Credentials are RDS-managed in Secrets Manager. The database stack has `DeletionPolicy: Retain`.
 - The backend template consumes the shared network and notifications layer; it does not create another VPC, shared API, or duplicate layer. Its Lambda is configured for IPv6 in dual-stack subnets. SNS direct-phone permission is region-scoped, `AdminGetUser` is scoped to the customer pool ARN, and the RDS secret/SQS/S3/SES permissions are scoped.
@@ -27,7 +28,7 @@ This connectivity test proves network egress from a temporary function; it does 
 
 ## Current source and test status
 
-- Re-run on `master` at `2b9f5ea`: backend suite **33 passed** (34 deprecation warnings); OCR/worker suite **33 passed, 1 skipped** in the standard run; frontend suite **2 passed** and static production build passed.
+- Re-run on the current local source: backend suite **34 passed** (34 deprecation warnings) after the customer DOB model test was added. The local validation environment was Python 3.14, not the deployed Python 3.11 Lambda runtime. Earlier OCR/worker suite **33 passed, 1 skipped** in the standard run; frontend suite **2 passed** and static production build passed at `2b9f5ea`.
 - The opt-in worker/PostgreSQL integration test also passed (**1 passed**) after applying the actual Alembic migration to a disposable PostgreSQL 16 database; the disposable container was removed. This does not verify the live RDS catalog or connectivity from B's Lambda.
 - Local static HTTP checks returned 200 for all 10 exported routes. `npm audit --omit=dev` reports 3 findings (1 critical, 2 high); Person C should assess the compatible fix before frontend release.
 - AWS CloudFormation validation and source-level SAM/lint checks are recorded in `implementation/PERSON_A_IMPLEMENTATION_PLAN.md`. These do not substitute for the pending B change-set review or live API/database integration.
