@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  Pramana shared private network and processing foundation — keeps IPv4 NAT
-  disabled and uses outbound-only IPv6 for required public AWS service APIs.
+  Pramana shared private network and processing foundation — uses private
+  subnets and outbound-only IPv6; it creates no IPv4 NAT or public subnet.
 
 Metadata:
   AWSToolsMetrics:
@@ -41,11 +41,6 @@ Parameters:
     Default: 'false'
     AllowedValues: ['true', 'false']
     Description: Enable after Person B's database secret and SES identity are ready.
-  EnableNatGateway:
-    Type: String
-    Default: 'false'
-    AllowedValues: ['true', 'false']
-    Description: Enable only when a runtime dependency requires public internet egress and the cost is approved.
   EnableCloudFront:
     Type: String
     Default: 'false'
@@ -100,7 +95,6 @@ Rules:
 
 Conditions:
   OCRWorkerEnabled: !Equals [!Ref EnableOCRWorker, 'true']
-  NatGatewayEnabled: !Equals [!Ref EnableNatGateway, 'true']
   DeployCloudFront: !Equals [!Ref EnableCloudFront, 'true']
   HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, '']]
   HasRDSIdentifier: !Not [!Equals [!Ref RDSInstanceIdentifier, '']]
@@ -144,45 +138,6 @@ Resources:
         mutable: change-with-constraints
     Properties:
       VpcId: !Ref ProjectVPC
-
-  InternetGateway:
-    Type: AWS::EC2::InternetGateway
-    Condition: NatGatewayEnabled
-    Metadata:
-      com.aws.cloudformation.Context:
-        why: Provides controlled outbound egress through the NAT gateway; no application resource is placed in the public subnet.
-        must:
-          - Do not attach public IP addresses to either Lambda or RDS resources.
-        mutable: change-with-constraints
-    Properties:
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-igw'
-
-  VPCGatewayAttachment:
-    Type: AWS::EC2::VPCGatewayAttachment
-    Condition: NatGatewayEnabled
-    Properties:
-      VpcId: !Ref ProjectVPC
-      InternetGatewayId: !Ref InternetGateway
-
-  PublicSubnet:
-    Type: AWS::EC2::Subnet
-    Condition: NatGatewayEnabled
-    Metadata:
-      com.aws.cloudformation.Context:
-        why: Hosts only the NAT gateway used for outbound service calls from private Lambda subnets.
-        must:
-          - Never place Lambda functions or RDS in this subnet.
-        mutable: change-with-constraints
-    Properties:
-      VpcId: !Ref ProjectVPC
-      CidrBlock: 10.40.0.0/24
-      AvailabilityZone: !Select [0, !GetAZs '']
-      MapPublicIpOnLaunch: false
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-public-a'
 
   PrivateSubnetA:
     Type: AWS::EC2::Subnet
@@ -232,59 +187,6 @@ Resources:
       SubnetId: !Ref PrivateSubnetB
       Ipv6CidrBlock: !Select [1, !Cidr [!Select [0, !GetAtt ProjectVPC.Ipv6CidrBlocks], 256, 64]]
 
-  PublicRouteTable:
-    Type: AWS::EC2::RouteTable
-    Condition: NatGatewayEnabled
-    Properties:
-      VpcId: !Ref ProjectVPC
-
-  PublicDefaultRoute:
-    Type: AWS::EC2::Route
-    Condition: NatGatewayEnabled
-    Metadata:
-      guard:
-        SuppressedRules:
-          - NO_UNRESTRICTED_ROUTE_TO_IGW
-      com.aws.cloudformation.Context:
-        why: Gives the public subnet that hosts only the NAT gateway its required internet route; private subnets route through NAT instead.
-        must:
-          - Keep application and database workloads out of the public subnet.
-    DependsOn: VPCGatewayAttachment
-    Properties:
-      RouteTableId: !Ref PublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref InternetGateway
-
-  PublicSubnetRouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Condition: NatGatewayEnabled
-    Properties:
-      SubnetId: !Ref PublicSubnet
-      RouteTableId: !Ref PublicRouteTable
-
-  NatEIP:
-    Type: AWS::EC2::EIP
-    Condition: NatGatewayEnabled
-    Properties:
-      Domain: vpc
-
-  NatGateway:
-    Type: AWS::EC2::NatGateway
-    Condition: NatGatewayEnabled
-    Metadata:
-      com.aws.cloudformation.Context:
-        why: Single-AZ NAT keeps SES API, Cognito JWKS, and AWS SDK calls reachable without public Lambda addresses; this is a cost-sensitive demo tradeoff, not multi-AZ egress.
-        must:
-          - Review hourly and data-transfer charges before deployment.
-        mutable: review-required
-    DependsOn: PublicSubnetRouteTableAssociation
-    Properties:
-      AllocationId: !GetAtt NatEIP.AllocationId
-      SubnetId: !Ref PublicSubnet
-      Tags:
-        - Key: Name
-          Value: !Sub '${ProjectName}-${Environment}-nat'
-
   PrivateRouteTableA:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -294,22 +196,6 @@ Resources:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref ProjectVPC
-
-  PrivateDefaultRouteA:
-    Type: AWS::EC2::Route
-    Condition: NatGatewayEnabled
-    Properties:
-      RouteTableId: !Ref PrivateRouteTableA
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGateway
-
-  PrivateDefaultRouteB:
-    Type: AWS::EC2::Route
-    Condition: NatGatewayEnabled
-    Properties:
-      RouteTableId: !Ref PrivateRouteTableB
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGateway
 
   PrivateIpv6DefaultRouteA:
     Type: AWS::EC2::Route
@@ -359,10 +245,7 @@ Resources:
         Statement:
           - Effect: Allow
             Principal: '*'
-            Action:
-              - s3:GetObject
-              - s3:PutObject
-              - s3:DeleteObject
+            Action: s3:GetObject
             Resource: !Sub '${DocumentBucket.Arn}/documents/*'
 
   OCRWorkerSecurityGroup:

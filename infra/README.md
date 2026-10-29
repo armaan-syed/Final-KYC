@@ -2,7 +2,7 @@
 
 `infra/sam/template.yaml` defines the shared foundation and OCR worker. It currently includes:
 
-- A private VPC with two private subnets and no NAT gateway by default, private Lambda security groups, and a database security group that accepts PostgreSQL only from the backend and OCR Lambda groups.
+- A private VPC with two private subnets, no NAT/EIP/public-subnet resources in the template, private Lambda security groups, and a database security group that accepts PostgreSQL only from the backend and OCR Lambda groups.
 - A free S3 gateway endpoint and an egress-only IPv6 Internet Gateway for private subnet outbound HTTPS. NAT and paid interface endpoints are not deployed. A temporary Lambda in the private subnets passed read-only connectivity checks to Secrets Manager, SQS, SNS, Cognito, and SES on 2026-10-29.
 - A private, versioned, SSE-S3 document bucket with access logging, TLS-only bucket policy, and CORS for the CloudFront origin.
 - A private frontend bucket; CloudFront OAC is conditional and currently disabled pending AWS account verification.
@@ -54,10 +54,10 @@ W1030 is excluded because these templates accept existing secret/sender ARNs as 
 
 The optional PostgreSQL integration test requires a dedicated, migrated test database and `PRAMANA_TEST_DATABASE_URL`. It creates and removes rows with fresh UUIDs. Never point it at a shared or production database.
 
-The current root template passes basic `sam validate`, `cfn-lint` 1.58.0 with W1030 excluded for caller-supplied ARN `String` parameters, and AWS `validate-template`. Both no-NAT and IPv6 changes were reviewed and executed as CloudFormation change sets. `cfn-guard` was used for the focused network rules. Current AWS resource state and change-set evidence are in `implementation/PERSON_A_IMPLEMENTATION_PLAN.md`.
+The root template previously passed `sam validate`, `cfn-lint` 1.58.0 with W1030 excluded for caller-supplied ARN `String` parameters, and AWS `validate-template`. The 2026-10-29 no-NAT source hardening passes the same local `cfn-lint` check; AWS validation was not rerun because the non-root AWS session had expired. The deployed no-NAT and IPv6 changes were reviewed and executed as CloudFormation change sets. `cfn-guard` was used for the focused network rules. Current AWS resource state and change-set evidence are in `implementation/PERSON_A_IMPLEMENTATION_PLAN.md`.
 
 The current Lambda-runtime worker proof passed on synthetic PAN/Aadhaar images and Aadhaar PDF. Combined code/layers are 258,176,462 bytes (3,967,538 bytes below the 262,144,000-byte quota); the 93,834,078-byte layer ZIP must be uploaded through S3. Keep this narrow size margin in view when dependencies or SAM packaging change.
 
 ## Deployment review gate
 
-Review every future CloudFormation change set before execution. NAT is disabled and absent from the deployed stack. Four interface endpoints across two AZs would add about $58.40/month in fixed hourly charges, so retain the verified IPv6 path unless a measured requirement justifies that cost. CloudFront remains disabled pending AWS account verification. Do not change teammate IAM access or commit credentials.
+Review every future CloudFormation change set before execution. The A-owned template has no NAT resources, and NAT is absent from the deployed stack. Four interface endpoints across two AZs would add about $58.40/month in fixed hourly charges, so retain the verified IPv6 path unless a measured requirement justifies that cost. CloudFront remains disabled pending AWS account verification. Do not change teammate IAM access or commit credentials.
