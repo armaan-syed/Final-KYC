@@ -8,11 +8,12 @@ import {
   ShieldCheck,
   AlertCircle,
   FileCheck,
-  Lock,
+  ScanLine,
 } from 'lucide-react';
 import { apiGetUploadUrl, directUploadToS3, apiSubmitKYC, getApiErrorMessage } from '@/lib/api';
 import { DocumentType } from '@/types';
 import { ErrorAlert, SuccessAlert } from '@/components/ui/Alerts';
+import { classifyDocument } from '@/lib/documentClassifier';
 
 export default function DocumentUploadPage() {
   const navigate = useNavigate();
@@ -22,7 +23,7 @@ export default function DocumentUploadPage() {
 
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [stepStatus, setStepStatus] = useState<
-    'idle' | 'requesting_url' | 'uploading_s3' | 'submitting' | 'done'
+    'idle' | 'scanning_document' | 'requesting_url' | 'uploading_s3' | 'submitting' | 'done'
   >('idle');
   const [error, setError] = useState<string | null>(null);
 
@@ -61,6 +62,18 @@ export default function DocumentUploadPage() {
 
     setError(null);
     try {
+      // Step 0: Pre-Upload Instant Classification (OCR Scan)
+      setStepStatus('scanning_document');
+      const classification = await classifyDocument(selectedFile, documentType);
+      if (!classification.isMatch) {
+        setError(
+          classification.message ||
+            `Mismatch detected: The uploaded file does not match the required ${documentType} format.`
+        );
+        setStepStatus('idle');
+        return;
+      }
+
       // Step 1: Request presigned S3 URL from FastAPI Backend
       setStepStatus('requesting_url');
       const { upload_url, s3_key } = await apiGetUploadUrl({
@@ -230,27 +243,35 @@ export default function DocumentUploadPage() {
               </div>
             </div>
 
-            <span className="text-xs font-bold px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-              Valid File
+            <span className="text-xs font-bold px-3 py-1 rounded-full bg-blue-100 text-sbi-blue border border-blue-200">
+              Format Supported
             </span>
           </div>
         )}
 
-        {/* Progress Bar */}
+        {/* Progress Bar & Status */}
         {stepStatus !== 'idle' && stepStatus !== 'done' && (
           <div className="space-y-2">
             <div className="flex justify-between text-xs font-bold text-slate-700">
-              <span>
+              <span className="flex items-center gap-1.5">
+                {stepStatus === 'scanning_document' && (
+                  <>
+                    <ScanLine className="w-3.5 h-3.5 text-sbi-accent animate-pulse" />
+                    Scanning document type with local OCR engine...
+                  </>
+                )}
                 {stepStatus === 'requesting_url' && 'Generating presigned S3 upload URL...'}
                 {stepStatus === 'uploading_s3' && `Directly uploading to AWS S3 (${uploadProgress}%)`}
                 {stepStatus === 'submitting' && 'Enqueuing to AWS SQS OCR pipeline...'}
               </span>
-              <span>{uploadProgress}%</span>
+              <span>{stepStatus === 'scanning_document' ? 'Verifying' : `${uploadProgress}%`}</span>
             </div>
             <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden border border-slate-200">
               <div
-                className="bg-gradient-to-r from-sbi-blue to-sbi-accent h-3 rounded-full transition-all duration-300"
-                style={{ width: `${uploadProgress}%` }}
+                className={`bg-gradient-to-r from-sbi-blue to-sbi-accent h-3 rounded-full transition-all duration-300 ${
+                  stepStatus === 'scanning_document' ? 'w-2/3 animate-pulse' : ''
+                }`}
+                style={stepStatus !== 'scanning_document' ? { width: `${uploadProgress}%` } : undefined}
               />
             </div>
           </div>
@@ -259,12 +280,24 @@ export default function DocumentUploadPage() {
         <button
           type="submit"
           disabled={!selectedFile || stepStatus !== 'idle'}
-          className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-sbi-blue to-sbi-accent text-white font-bold text-sm hover:from-sbi-navy hover:to-blue-600 transition shadow-lg shadow-blue-900/20 disabled:opacity-50 flex items-center justify-center gap-2"
+          className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-sbi-blue to-sbi-accent text-white font-bold text-sm hover:from-sbi-navy hover:to-blue-600 transition shadow-lg shadow-blue-900/20 flex items-center justify-center gap-2 disabled:opacity-50"
         >
-          <Lock className="w-4 h-4" />
-          {stepStatus === 'idle'
-            ? 'Submit for Immediate Verification'
-            : 'Processing Submission with AWS...'}
+          {stepStatus === 'scanning_document' && (
+            <>
+              <ScanLine className="w-4 h-4 animate-spin" />
+              <span>Checking Document Type...</span>
+            </>
+          )}
+          {stepStatus === 'requesting_url' && <span>Preparing Direct Upload...</span>}
+          {stepStatus === 'uploading_s3' && <span>Uploading to Bank Cloud ({uploadProgress}%)...</span>}
+          {stepStatus === 'submitting' && <span>Enqueuing Verification...</span>}
+          {stepStatus === 'done' && <span>Upload Complete!</span>}
+          {stepStatus === 'idle' && (
+            <>
+              <ShieldCheck className="w-4 h-4" />
+              <span>Verify & Upload Document</span>
+            </>
+          )}
         </button>
       </form>
     </div>
