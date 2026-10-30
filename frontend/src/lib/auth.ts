@@ -1,10 +1,13 @@
 import { Amplify } from 'aws-amplify';
 import {
   signIn as amplifySignIn,
+  confirmSignIn as amplifyConfirmSignIn,
   signOut as amplifySignOut,
   fetchAuthSession,
 } from 'aws-amplify/auth';
 import { LoginRequest, LoginResponse } from '@/types';
+
+export type LoginResult = LoginResponse | { challenge: 'NEW_PASSWORD_REQUIRED' };
 
 // Detect whether to use client-side mock adapter
 export const isMockEnabled = (): boolean => {
@@ -69,7 +72,40 @@ export async function getCurrentUserRole(): Promise<'customer' | 'reviewer' | nu
   return null;
 }
 
-export async function loginUser(req: LoginRequest, role: 'customer' | 'reviewer' = 'customer'): Promise<LoginResponse> {
+function persistLoginSession(
+  req: LoginRequest,
+  role: 'customer' | 'reviewer',
+  session: Awaited<ReturnType<typeof fetchAuthSession>>,
+): LoginResponse {
+  const token = session.tokens?.accessToken?.toString() || '';
+  const idToken = session.tokens?.idToken?.toString() || '';
+  if (!token || !idToken) {
+    throw new Error('Sign-in did not complete. Please follow the authentication prompt and retry.');
+  }
+
+  const res: LoginResponse = {
+    access_token: token,
+    id_token: idToken,
+    refresh_token: '',
+    token_type: 'Bearer',
+    expires_in: 3600,
+    user: {
+      sub: session.userSub || '',
+      email: req.email,
+      role,
+    },
+  };
+
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('pramana_access_token', token);
+    localStorage.setItem('pramana_user_role', role);
+    localStorage.setItem('pramana_user_email', req.email);
+  }
+
+  return res;
+}
+
+export async function loginUser(req: LoginRequest, role: 'customer' | 'reviewer' = 'customer'): Promise<LoginResult> {
   if (isMockEnabled()) {
     const mockRes: LoginResponse = {
       access_token: `mock-jwt-${role}-token-${Date.now()}`,
@@ -95,35 +131,33 @@ export async function loginUser(req: LoginRequest, role: 'customer' | 'reviewer'
   }
 
   configureAmplify(role);
-  await amplifySignIn({
+  const signInResult = await amplifySignIn({
     username: req.email,
     password: req.password,
   });
 
-  const session = await fetchAuthSession();
-  const token = session.tokens?.accessToken?.toString() || '';
-  const idToken = session.tokens?.idToken?.toString() || '';
-
-  const res: LoginResponse = {
-    access_token: token,
-    id_token: idToken,
-    refresh_token: '',
-    token_type: 'Bearer',
-    expires_in: 3600,
-    user: {
-      sub: session.userSub || '',
-      email: req.email,
-      role,
-    },
-  };
-
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('pramana_access_token', token);
-    localStorage.setItem('pramana_user_role', role);
-    localStorage.setItem('pramana_user_email', req.email);
+  if (!signInResult.isSignedIn) {
+    if (signInResult.nextStep.signInStep === 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED') {
+      return { challenge: 'NEW_PASSWORD_REQUIRED' };
+    }
+    throw new Error('Additional authentication is required. Please contact an administrator.');
   }
 
-  return res;
+  const session = await fetchAuthSession();
+  return persistLoginSession(req, role, session);
+}
+
+export async function completeNewPasswordSignIn(
+  req: LoginRequest,
+  role: 'customer' | 'reviewer',
+): Promise<LoginResponse> {
+  const result = await amplifyConfirmSignIn({ challengeResponse: req.password });
+  if (!result.isSignedIn) {
+    throw new Error('Password setup did not complete. Please retry sign-in.');
+  }
+
+  const session = await fetchAuthSession();
+  return persistLoginSession(req, role, session);
 }
 
 export async function logoutUser() {

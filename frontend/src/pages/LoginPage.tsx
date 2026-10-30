@@ -14,12 +14,13 @@ import {
   User,
   Shield,
 } from 'lucide-react';
-import { loginUser } from '@/lib/auth';
+import { completeNewPasswordSignIn, loginUser } from '@/lib/auth';
 import { ErrorAlert } from '@/components/ui/Alerts';
 
 const loginSchema = z.object({
   email: z.string().email('Please enter a valid official email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  password: z.string().min(1, 'Please enter your password'),
+  confirmPassword: z.string().optional(),
   role: z.enum(['customer', 'reviewer']),
 });
 
@@ -29,6 +30,9 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [newPasswordRequired, setNewPasswordRequired] = useState(false);
+  const [challengeEmail, setChallengeEmail] = useState('');
+  const [challengeRole, setChallengeRole] = useState<'customer' | 'reviewer'>('customer');
 
   const {
     register,
@@ -41,6 +45,7 @@ export default function LoginPage() {
     defaultValues: {
       email: '',
       password: '',
+      confirmPassword: '',
       role: 'customer',
     },
   });
@@ -51,8 +56,40 @@ export default function LoginPage() {
     setErrorMessage(null);
     setLoading(true);
     try {
-      await loginUser({ email: data.email, password: data.password }, data.role);
-      if (data.role === 'reviewer') {
+      let role = data.role;
+      if (newPasswordRequired) {
+        const hasRequiredComplexity =
+          data.password.length >= 8 &&
+          /[A-Z]/.test(data.password) &&
+          /[a-z]/.test(data.password) &&
+          /\d/.test(data.password) &&
+          /[^A-Za-z0-9]/.test(data.password);
+        if (!hasRequiredComplexity) {
+          setErrorMessage('Use at least 8 characters with uppercase, lowercase, a number, and a symbol.');
+          return;
+        }
+        if (data.password !== data.confirmPassword) {
+          setErrorMessage('The new passwords do not match.');
+          return;
+        }
+        role = challengeRole;
+        await completeNewPasswordSignIn(
+          { email: challengeEmail, password: data.password },
+          challengeRole,
+        );
+      } else {
+        const result = await loginUser({ email: data.email, password: data.password }, data.role);
+        if ('challenge' in result && result.challenge === 'NEW_PASSWORD_REQUIRED') {
+          setChallengeEmail(data.email);
+          setChallengeRole(data.role);
+          setNewPasswordRequired(true);
+          setValue('password', '');
+          setValue('confirmPassword', '');
+          return;
+        }
+      }
+
+      if (role === 'reviewer') {
         navigate('/reviewer/dashboard');
       } else {
         navigate('/dashboard');
@@ -138,6 +175,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => setValue('role', 'customer')}
+                disabled={newPasswordRequired}
                 className={`py-2.5 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 ${
                   selectedRole === 'customer'
                     ? 'bg-white text-sbi-blue shadow-sm'
@@ -150,6 +188,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => setValue('role', 'reviewer')}
+                disabled={newPasswordRequired}
                 className={`py-2.5 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 ${
                   selectedRole === 'reviewer'
                     ? 'bg-white text-sbi-blue shadow-sm'
@@ -163,14 +202,26 @@ export default function LoginPage() {
 
             <div className="mb-6">
               <h3 className="text-xl font-bold text-slate-900">
-                {selectedRole === 'customer' ? 'Sign In to Your Account' : 'Reviewer Desk Authorization'}
+                {newPasswordRequired
+                  ? 'Set Your Permanent Password'
+                  : selectedRole === 'customer'
+                    ? 'Sign In to Your Account'
+                    : 'Reviewer Desk Authorization'}
               </h3>
               <p className="text-xs text-slate-500 mt-1">
-                {selectedRole === 'customer'
-                  ? 'Access your KYC application, document upload, and real-time status.'
-                  : 'Enter institutional credentials to inspect flagged KYC exceptions.'}
+                {newPasswordRequired
+                  ? 'Your administrator-issued temporary password was accepted. Set a new password to finish signing in.'
+                  : selectedRole === 'customer'
+                    ? 'Access your KYC application, document upload, and real-time status.'
+                    : 'Enter institutional credentials to inspect flagged KYC exceptions.'}
               </p>
             </div>
+
+            {newPasswordRequired && (
+              <p className="mb-5 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs leading-relaxed text-blue-900">
+                The new password must be at least 8 characters and include uppercase and lowercase letters, a number, and a symbol.
+              </p>
+            )}
 
             {errorMessage && (
               <div className="mb-5">
@@ -186,6 +237,7 @@ export default function LoginPage() {
                 <input
                   type="email"
                   {...register('email')}
+                  readOnly={newPasswordRequired}
                   placeholder={selectedRole === 'customer' ? 'name@example.com' : 'officer@bank.internal'}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-sbi-accent focus:border-transparent transition-all shadow-sm"
                 />
@@ -196,18 +248,32 @@ export default function LoginPage() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Password
+                  {newPasswordRequired ? 'New Password' : 'Password'}
                 </label>
                 <input
                   type="password"
                   {...register('password')}
-                  placeholder="••••••••••••"
+                  placeholder={newPasswordRequired ? 'Choose a strong new password' : '••••••••••••'}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-sbi-accent focus:border-transparent transition-all shadow-sm"
                 />
                 {errors.password && (
                   <p className="mt-1 text-xs text-rose-600 font-medium">{errors.password.message}</p>
                 )}
               </div>
+
+              {newPasswordRequired && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Confirm New Password
+                  </label>
+                  <input
+                    type="password"
+                    {...register('confirmPassword')}
+                    placeholder="Enter the new password again"
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-sbi-accent focus:border-transparent transition-all shadow-sm"
+                  />
+                </div>
+              )}
 
               <button
                 type="submit"
@@ -218,7 +284,7 @@ export default function LoginPage() {
                   <span>Authenticating Session...</span>
                 ) : (
                   <>
-                    <span>Proceed Securely</span>
+                    <span>{newPasswordRequired ? 'Set Password & Sign In' : 'Proceed Securely'}</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
