@@ -12,6 +12,10 @@
 
 Person B owns Cognito pools, RDS and its secret, the FastAPI/API Gateway component, and notification provider configuration. `backend/template.yaml` consumes outputs from the shared stack. The A-owned foundation is deployed; it does not create B-owned RDS, Cognito, backend/API, or customer notification resources. Person B and Person C's existing AWS access has not been changed.
 
+`backend/template.yaml` requires the shared notifications/RDS CA layer ARN as `SharedNotificationsLayerArn`. The foundation exports the current version as the `SharedNotificationsLayerArn` stack output. Older layer versions are retained when a new version is published so a backend deployment that still references an earlier ARN is not broken.
+
+When enabling the OCR worker, pass Person B's live private RDS endpoint as `RDSHost`. The managed database secret supplies credentials; the worker uses the configured endpoint when the secret has no `host` field, and uses the secret host if present.
+
 ### Current Person B network handoff
 
 - VPC: `vpc-0f16fa3dea85f7b0d`
@@ -21,7 +25,14 @@ Person B owns Cognito pools, RDS and its secret, the FastAPI/API Gateway compone
 - Backend Lambda security group: `sg-02823dd2442632bed`
 - OCR worker security group: `sg-0751ba5b887acb41c`
 
-The database security group allows TCP 5432 only from the backend and worker security groups. NAT and public routes have been removed. The VPC has `2600:1f18:4020:8800::/56`; its two private subnets use `2600:1f18:4020:8800::/64` and `2600:1f18:4020:8801::/64`. Both private route tables send IPv6 default traffic through egress-only gateway `eigw-0e03c52bb1008d130`. Lambda security groups limit IPv6 egress to TCP 443; their pre-existing IPv4 default egress has no public IPv4 route in these private subnets. The backend and OCR Lambda service path still needs verification from those actual functions after deployment.
+The database security group allows TCP 5432 only from the backend and worker security groups. NAT and public routes have been removed. The VPC has `2600:1f18:4020:8800::/56`; its two private subnets use `2600:1f18:4020:8800::/64` and `2600:1f18:4020:8801::/64`. Both private route tables send IPv6 default traffic through egress-only gateway `eigw-0e03c52bb1008d130`. Lambda security groups limit IPv6 egress to TCP 443; their pre-existing IPv4 default egress has no public IPv4 route in these private subnets. The connectivity probes were superseded by the synthetic deployed workflow recorded below.
+
+### Live release status (2026-10-30)
+
+- `pramana-dev-backend` is deployed at `https://rimait7lg7.execute-api.us-east-1.amazonaws.com/dev`; health and CORS preflight checks pass. A synthetic live API flow passed Cognito access-token auth, presigned upload, SQS, OCR to `REVIEW_REQUIRED`, reviewer decision, customer status, and audit.
+- `pramana-dev-foundation` is `UPDATE_COMPLETE`; the OCR worker and SQS event mapping are enabled, using OCR layer v4 and shared layer v7.
+- The React/Vite production build was uploaded to the private frontend bucket with SSE-S3. AWS rejected CloudFront creation because the account must be verified before adding CloudFront resources, so the site is not public yet. CORS currently allows `http://localhost:3000`; update it to the CloudFront origin after the distribution exists.
+- The synthetic `.invalid` email attempt was rejected and audited; no real email or SMS was delivered. SES production access and the SNS SMS service subscription remain unavailable, so real notification delivery is not verified.
 
 ## Build and validate locally
 

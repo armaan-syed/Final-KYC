@@ -56,6 +56,11 @@ Parameters:
     Default: ''
     AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+$'
     Description: Person B's Secrets Manager ARN for the RDS PostgreSQL credentials.
+  RDSHost:
+    Type: String
+    Default: ''
+    AllowedPattern: '^$|^[A-Za-z0-9.-]+$'
+    Description: Person B's private RDS endpoint, used when the managed secret contains credentials only.
   DatabaseName:
     Type: String
     Default: pramana_kyc
@@ -88,6 +93,8 @@ Rules:
     Assertions:
       - Assert: !Not [!Equals [!Ref DatabaseSecretArn, '']]
         AssertDescription: DatabaseSecretArn is required when EnableOCRWorker is true.
+      - Assert: !Not [!Equals [!Ref RDSHost, '']]
+        AssertDescription: RDSHost is required when EnableOCRWorker is true.
       - Assert: !Not [!Equals [!Ref SESSenderEmail, '']]
         AssertDescription: SESSenderEmail is required when EnableOCRWorker is true.
       - Assert: !Not [!Equals [!Ref SESSenderIdentityArn, '']]
@@ -491,6 +498,13 @@ Resources:
   FrontendDistribution:
     Type: AWS::CloudFront::Distribution
     Condition: DeployCloudFront
+    Metadata:
+      # CloudFront's AWS-managed default hostname certificate controls its
+      # viewer security policy. Requiring TLSv1.2 here needs a custom domain
+      # and ACM certificate, which this project has not configured.
+      guard:
+        SuppressedRules:
+          - CLOUDFRONT_MINIMUM_PROTOCOL_VERSION_RULE
     Properties:
       DistributionConfig:
         Comment: !Sub '${ProjectName}-${Environment} static frontend'
@@ -499,6 +513,8 @@ Resources:
         HttpVersion: http2
         IPV6Enabled: true
         PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
         Origins:
           - DomainName: !GetAtt FrontendBucket.RegionalDomainName
             Id: PrivateFrontendBucket
@@ -614,6 +630,7 @@ Resources:
         - python3.12
       CompatibleArchitectures:
         - x86_64
+      RetentionPolicy: Retain
 
   SharedNotificationsLayer:
     Type: AWS::Serverless::LayerVersion
@@ -632,6 +649,7 @@ Resources:
         - python3.12
       CompatibleArchitectures:
         - x86_64
+      RetentionPolicy: Retain
 
   OCRWorkerLogGroup:
     Type: AWS::Logs::LogGroup
@@ -725,7 +743,6 @@ Resources:
       Role: !GetAtt OCRWorkerExecutionRole.Arn
       Timeout: 120
       MemorySize: 2048
-      ReservedConcurrentExecutions: 5
       Layers:
         - !Ref OCRRuntimeLayer
         - !Ref SharedNotificationsLayer
@@ -740,6 +757,7 @@ Resources:
         Variables:
           DOCUMENTS_BUCKET: !Ref DocumentBucket
           DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          DATABASE_HOST: !Ref RDSHost
           DATABASE_NAME: !Ref DatabaseName
           SES_SENDER_EMAIL: !Ref SESSenderEmail
           OCR_MAX_RECEIVE_COUNT: '3'
@@ -967,6 +985,9 @@ Outputs:
   AlarmTopicArn:
     Description: Topic ARN for infrastructure alarms; not used for customer notifications.
     Value: !Ref AlarmTopic
+  SharedNotificationsLayerArn:
+    Description: Versioned shared notifications and RDS CA layer ARN for Person B's backend Lambda.
+    Value: !Ref SharedNotificationsLayer
   OCRWorkerFunctionArn:
     Condition: OCRWorkerEnabled
     Description: ARN of the SQS-triggered OCR worker Lambda.

@@ -37,9 +37,12 @@ class PostgresRepository:
                 return self._secret.value
             response = self.secrets_client.get_secret_value(SecretId=self.secret_arn)
             secret = json.loads(response["SecretString"])
-            required = {"host", "username", "password"}
-            if not isinstance(secret, dict) or not required.issubset(secret):
-                raise ValueError("database secret is missing host, username, or password")
+            if not isinstance(secret, dict):
+                raise ValueError("database secret must be a JSON object")
+            host = secret.get("host") or os.environ.get("DATABASE_HOST")
+            if not host or not secret.get("username") or not secret.get("password"):
+                raise ValueError("database configuration is missing host, username, or password")
+            secret["host"] = host
             self._secret = _CachedSecret(value=secret, expires_at=now + 300)
             return secret
 

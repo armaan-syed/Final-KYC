@@ -42,6 +42,9 @@ class Settings(BaseSettings):
 
     # API
     api_base_url: str = "http://localhost:8000"
+    # Comma-separated browser origins. Production deploys set this to the
+    # CloudFront origin; local development retains the Vite default.
+    frontend_origin: str = "http://localhost:3000"
 
     # Supported upload formats (JPEG, PNG, PDF)
     supported_content_types: List[str] = [

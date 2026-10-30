@@ -7,6 +7,7 @@ repo_root="$(cd -- "$ocr_dir/../.." && pwd)"
 build_dir="$(mktemp -d "$ocr_dir/.build.XXXXXX")"
 builder_dir="$build_dir/tesseract-builder"
 layer_dir="$build_dir/layer"
+shared_layer_dir="$build_dir/shared-layer"
 dist_dir="$ocr_dir/dist"
 shared_dist="$repo_root/infra/shared/dist"
 image_name="pramana-tesseract-layer:python312-x86_64"
@@ -137,6 +138,29 @@ curl -fL --retry 3 \
     -o "$layer_dir/certs/global-bundle.pem"
 test -s "$layer_dir/certs/global-bundle.pem"
 
+# Build the shared layer from current source before runtime validation. This
+# prevents a stale dist directory from silently omitting shared modules.
+mkdir -p "$shared_layer_dir/python" "$shared_layer_dir/certs"
+cp -a "$repo_root/infra/shared/python/." "$shared_layer_dir/python/"
+cp "$layer_dir/certs/global-bundle.pem" "$shared_layer_dir/certs/global-bundle.pem"
+python3 - "$shared_layer_dir/python" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+
+root = Path(sys.argv[1]).resolve()
+for candidate in list(root.rglob("*")):
+    if candidate.is_dir() and candidate.name == "__pycache__":
+        if candidate.resolve().is_relative_to(root):
+            shutil.rmtree(candidate)
+for bytecode in root.rglob("*.pyc"):
+    if bytecode.is_file() and bytecode.resolve().is_relative_to(root):
+        bytecode.unlink()
+for required in ("pramana_limits.py", "pramana_notifications/__init__.py"):
+    if not (root / required).is_file():
+        raise SystemExit(f"shared layer source is missing {required}")
+PY
+
 docker run --rm "${docker_run_options[@]}" \
     --platform linux/amd64 \
     --entrypoint /bin/sh \
@@ -188,8 +212,9 @@ docker run --rm "${docker_run_options[@]}" \
     -e 'PATH=/opt/bin:/var/lang/bin:/usr/local/bin:/usr/bin:/bin' \
     -e 'LD_LIBRARY_PATH=/opt/lib:/lib64:/usr/lib64' \
     -e 'TESSDATA_PREFIX=/opt/tesseract/share/tessdata' \
-    -e 'PYTHONPATH=/opt/worker:/opt/python:/src/infra/ocr/src:/src/infra/ocr/poc:/src/infra/shared/python' \
+    -e 'PYTHONPATH=/opt/worker:/opt/python:/opt/shared/python:/src/infra/ocr/src:/src/infra/ocr/poc' \
     -v "$layer_dir:/opt:ro,z" \
+    -v "$shared_layer_dir:/opt/shared:ro,z" \
     -v "$worker_package:/opt/worker:ro,z" \
     -v "$repo_root:/src:ro,z" \
     -v "$fixture_dir:/fixtures:ro,z" \
@@ -205,7 +230,7 @@ case "$PATH" in /opt/bin:*) ;; *) echo "Lambda layer bin path missing" >&2; exit
 case "$LD_LIBRARY_PATH" in /opt/lib:*) ;; *) echo "Lambda layer library path missing" >&2; exit 1 ;; esac
 touch /tmp/pramana-layer-write-check
 rm /tmp/pramana-layer-write-check
-python -c "import cv2, numpy, pypdfium2, pytesseract, psycopg2, pramana_ocr.worker, pramana_ocr.database, pramana_notifications, platform, sys; assert sys.version_info[:2] == (3, 12); assert platform.machine() == \"x86_64\"; print(\"runtime imports: ok; python=\" + sys.version.split()[0] + \"; architecture=\" + platform.machine()); print(\"opencv=\" + cv2.__version__ + \"; numpy=\" + numpy.__version__ + \"; psycopg2=\" + psycopg2.__version__)"
+python -c "import cv2, numpy, pypdfium2, pytesseract, psycopg2, pramana_ocr.worker, pramana_ocr.database, pramana_limits, pramana_notifications, platform, sys; assert sys.version_info[:2] == (3, 12); assert platform.machine() == \"x86_64\"; print(\"runtime imports: ok; python=\" + sys.version.split()[0] + \"; architecture=\" + platform.machine()); print(\"opencv=\" + cv2.__version__ + \"; numpy=\" + numpy.__version__ + \"; psycopg2=\" + psycopg2.__version__)"
 ldd /opt/bin/tesseract > /tmp/tesseract-ldd.txt
 ldd /opt/lib/libtesseract.so.5 >> /tmp/tesseract-ldd.txt
 if grep -q "not found" /tmp/tesseract-ldd.txt; then cat /tmp/tesseract-ldd.txt >&2; exit 1; fi
@@ -229,9 +254,8 @@ unzipped_bytes="$(du -sb "$layer_dir" | cut -f1)"
 zipped_bytes="$(du -sb "$archive" | cut -f1)"
 worker_bytes="$(du -sb "$worker_package" | cut -f1)"
 source_bytes="$(du -sb "$ocr_dir/src" | cut -f1)"
-shared_bytes="$(du -sb "$repo_root/infra/shared/python" | cut -f1)"
-shared_cert_bytes="$(wc -c < "$layer_dir/certs/global-bundle.pem")"
-combined_bytes=$((unzipped_bytes + worker_bytes + source_bytes + shared_bytes + shared_cert_bytes))
+shared_bytes="$(du -sb "$shared_layer_dir" | cut -f1)"
+combined_bytes=$((unzipped_bytes + worker_bytes + source_bytes + shared_bytes))
 if (( unzipped_bytes > 250 * 1024 * 1024 )); then
     printf 'Layer exceeds Lambda unzipped size limit: %s bytes\n' "$unzipped_bytes" >&2
     exit 1
@@ -242,6 +266,7 @@ if (( combined_bytes > 250 * 1024 * 1024 )); then
 fi
 printf 'Layer archive: %s\n' "$archive"
 printf 'Layer size: zipped=%s bytes unzipped=%s bytes\n' "$zipped_bytes" "$unzipped_bytes"
+printf 'Shared layer size: %s bytes\n' "$shared_bytes"
 printf 'Function code plus all layers: %s bytes\n' "$combined_bytes"
 if (( zipped_bytes > 50 * 1024 * 1024 )); then
     printf 'Layer ZIP exceeds direct-upload limit; upload it from S3.\n'
@@ -252,7 +277,6 @@ cp -a "$layer_dir/." "$dist_dir/layer/"
 cp "$archive" "$dist_dir/pramana-ocr-layer.zip"
 printf 'SAM layer source: %s\n' "$dist_dir/layer"
 rm -rf "$shared_dist"
-mkdir -p "$shared_dist/layer/python" "$shared_dist/layer/certs"
-cp -a "$repo_root/infra/shared/python/." "$shared_dist/layer/python/"
-cp "$layer_dir/certs/global-bundle.pem" "$shared_dist/layer/certs/global-bundle.pem"
+mkdir -p "$shared_dist/layer"
+cp -a "$shared_layer_dir/." "$shared_dist/layer/"
 printf 'SAM shared layer source: %s\n' "$shared_dist/layer"

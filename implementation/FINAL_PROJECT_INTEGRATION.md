@@ -4,7 +4,20 @@ Use this after and during the individual Person A, B, and C plans. It coordinate
 
 ## Final Project Integration
 
-## Current integration snapshot — 2026-10-29
+## Current integration snapshot — 2026-10-30
+
+This status supersedes the earlier snapshot below.
+
+- AWS caller: non-root `pramana-admin` in account `682197558335`, `us-east-1`. `pramana-dev-backend` is `CREATE_COMPLETE` at `https://rimait7lg7.execute-api.us-east-1.amazonaws.com/dev`; `pramana-dev-foundation` is `UPDATE_COMPLETE`. No NAT or interface endpoints were added.
+- RDS is private and migrated at `001_initial_schema`; the catalog check found all nine expected application tables, 67 expected columns, and `customers.date_of_birth` as `DATE NOT NULL`.
+- The deployed API `/health` returns 200. CORS preflight from `http://localhost:3000` returns 200 and unauthenticated protected access returns 403. A live synthetic API workflow passed: Cognito customer/reviewer access tokens → upload URL → presigned S3 PUT → submit/SQS → OCR worker → `REVIEW_REQUIRED` → reviewer queue/detail → `REUPLOAD_REQUESTED` → customer `REUPLOAD_PENDING` and audit. It used a blank synthetic Aadhaar PNG and `.invalid` identities; no real customer data or deliverable notification was used. SES logged `provider_accepted=false` for the synthetic re-upload email. The synthetic DB rows, Cognito users, exact S3 object version, one-off runner Lambda/package/log group, and local artifacts were removed and absence checked.
+- OCR worker is Active with SQS event mapping Enabled, runtime Python 3.12, OCR layer v4, and shared layer v7. Its actual queued document completed successfully to `REVIEW_REQUIRED`; the reviewed decision/status/audit then persisted through the deployed API and RDS.
+- Current local verification: backend **36 passed**, OCR **36 passed, 1 skipped** (optional PostgreSQL test), frontend **5 passed**, and production Vite build passed. `npm audit --omit=dev` reports **0 vulnerabilities**. Focused `cfn-guard` checks passed; the intrinsic S3 TLS policy check was skipped by the rule engine and manually inspected. Build warnings are limited to dependency annotations and a >500 kB chunk. Production assets are uploaded to the private, SSE-S3 frontend bucket.
+- CloudFront creation failed with AWS 403: the account must be verified before new CloudFront resources can be added. `EnableCloudFront=false`; the static site is not publicly reachable. Do not retry until the account owner completes AWS verification. Current API/document CORS origin is `http://localhost:3000`; change it to the CloudFront domain after distribution creation.
+- SES sender identity is verified, but SES production access remains disabled. SNS SMS attributes cannot be read because the account lacks the service subscription. Notification delivery is therefore not ready; no real email or SMS was delivered.
+- Remaining release acceptance: AWS account verification and CloudFront; update production API/document CORS; browser-based customer registration/confirmation and customer/reviewer sign-in plus UI workflow; SES production access and approved SNS SMS service/use/spending setup before real notification delivery tests. API-to-worker-to-reviewer behavior is verified through synthetic requests, but the public browser workflow and notification delivery are not.
+
+## Earlier integration snapshot — 2026-10-29
 
 - The shared decisions and owner actions are recorded in `INTEGRATION_DECISIONS_2026-10-29.md`. B's latest `master` commit `cdfeedf` was fetched and fast-forwarded; A's reconciled changes are being validated before push.
 - Combined local verification: backend **33 passed** (34 dependency deprecation warnings); OCR/worker **33 passed, 1 skipped** (dedicated migrated PostgreSQL test DB not configured); frontend **2 passed** and `npm run build` succeeded as a static export. The build emitted `/dashboard`, `/reviewer/dashboard`, `/reviewer/queue`, and `/reviewer/cases/detail`. `npm audit --omit=dev` reports **3 production dependency vulnerabilities** (2 high, 1 critical); fixing them requires a Next.js/Zod major upgrade according to the current lockfile audit and needs C's compatibility review.

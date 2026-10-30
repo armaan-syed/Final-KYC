@@ -12,7 +12,13 @@ The work is split into three standalone plans, one for each existing assignment.
 
 - [Final project integration and end-to-end verification](FINAL_PROJECT_INTEGRATION.md)
 
-## Person A execution note — 2026-10-29
+## Current integrated status — 2026-10-30
+
+The private RDS schema is live and verified, the reviewed B API stack and A OCR worker are deployed, and a synthetic live API workflow passed Cognito access-token authentication, presigned S3 upload, SQS submission, OCR to `REVIEW_REQUIRED`, reviewer decision, final customer status, and audit persistence. Backend tests pass (**36**), OCR tests pass (**36**, 1 optional PostgreSQL test skipped), frontend tests pass (**5**), and the production build passes. Synthetic users, rows, document versions, and temporary runner resources were cleaned up.
+
+Release still needs AWS account verification before CloudFront can be created, production API/document CORS updated to the resulting origin, browser UI/registration acceptance, and SES/SNS provider access for real notification delivery. The SES identity is verified, but SES production access is disabled and SNS SMS service subscription is unresolved. Full public UI and notification delivery are not verified. See the [current integration snapshot](FINAL_PROJECT_INTEGRATION.md#current-integration-snapshot--2026-10-30).
+
+## Historical Person A execution note — 2026-10-29
 
 Person A confirms Person B and Person C are 100% trusted teammates. Their existing AWS `AdministratorAccess` must remain unchanged during Person A's implementation. Person A will remove their access manually after the implementation; do not modify either teammate's AWS access as part of this work.
 

@@ -9,7 +9,7 @@ This is the standalone implementation plan for Person C. It follows the existing
 3. Implement in small stages: **implement → test → inspect results → continue**. A stage is complete only when its tests pass and its acceptance criteria below are met. Add tests with the code; do not postpone them to the end.
 4. Use local fakes, fixtures, or SAM local where cloud resources are unavailable. Clearly label what was tested locally versus against deployed AWS resources. Never report a cloud integration as verified if it was only mocked.
 5. Never commit AWS credentials, database passwords, real identity documents, or real customer data. Keep local `.env` files ignored; use Secrets Manager and encrypted Lambda configuration for deployed secrets.
-6. Keep the existing stack: AWS SAM, S3/CloudFront, API Gateway, Lambda, Cognito, SQS, PostgreSQL/RDS, Tesseract/OpenCV, SNS, SES, and CloudWatch. The frontend remains Next.js/React/TypeScript/Tailwind with Amplify Auth and the existing API.
+6. Keep the existing stack: AWS SAM, S3/CloudFront, API Gateway, Lambda, Cognito, SQS, PostgreSQL/RDS, Tesseract/OpenCV, SNS, SES, and CloudWatch. The current frontend is React + Vite + TypeScript/Tailwind with Amplify Auth and the existing API.
 7. Where the source documents conflict, do not silently implement both behaviors. Resolve the item at the shared contract checkpoint below, record the selected existing behavior in a small integration contract/change note, and make all three implementations and tests match it. Do not treat unresolved contract questions as permission to add a feature.
 
 ## Shared integration contract and current handoff
@@ -18,15 +18,17 @@ The selected cross-person behavior is documented in [`INTEGRATION_DECISIONS_2026
 
 Current integration source uses Cognito Amplify SRP for customer/reviewer sign-in and sessions, with backend `/auth/register` and `/auth/confirm` for customer registration/profile creation. The frontend sends the Cognito access token to FastAPI. Case and attempt statuses are distinct; use the values and polling rules in the linked contract. Upload limits are JPEG/PNG/PDF, 10 MiB, and 3 PDF pages. Customer status should stop polling outside `PROCESSING` and expose `REVIEW_REQUIRED` for action. Static reviewer case details use the query-string route; the backend remains the authorization boundary.
 
-A fixed the route-group collisions by moving reviewer pages under the actual `/reviewer` path, fixed the frontend test import, and added the missing `@hookform/resolvers` dependency while integrating registration/confirmation with the backend API. Verification passes: **2 frontend tests passed** and `npm run build` generated a static export with `/dashboard`, `/reviewer/dashboard`, `/reviewer/queue`, and `/reviewer/cases/detail`. `npm audit --omit=dev` still reports 3 production vulnerabilities (2 high, 1 critical); the automated fix requires Next.js and Zod major upgrades, which need C's compatibility review before release.
+The master frontend is React + Vite; this plan's setup and deployment steps have been aligned to the active toolchain. The current source has API-backed registration/confirmation, Cognito `given_name` mapping, Amplify sign-in/session handling, customer/reviewer routes, direct S3 upload, and reviewer audit views.
 
-Remaining C work: align all UI badges/actions with the canonical case/attempt states, finish frontend production build and browser checks, remediate or document the dependency audit findings, supply the static build when hosting is available, and verify customer/reviewer flows against B's deployed API. CloudFront remains disabled pending AWS account verification; do not claim a deployed UI/API integration yet.
+Live frontend check on 2026-10-30: **5 tests passed**, the production `npm run build` passed with mocks disabled and the deployed API/Cognito public configuration, and `npm audit --omit=dev` reported **0 vulnerabilities**. The Vite preview returned HTTP 200 for `/`, `/register`, `/dashboard`, `/reviewer/dashboard`, `/reviewer/queue`, and the query-string reviewer detail route. Production assets are uploaded to the private, SSE-S3 frontend bucket. A separate synthetic live API workflow verified Cognito customer/reviewer access tokens, upload, OCR, reviewer decision, status, and audit; it did not exercise the browser UI or registration/confirmation. The site is not browser-accessible yet because CloudFront creation is blocked by AWS account verification. API/document CORS must change from `http://localhost:3000` to the CloudFront origin after that distribution exists.
+
+Remaining C work is live browser verification of customer registration/confirmation, customer/reviewer sign-in, upload, status, and audit against the deployed API after CloudFront and the final CORS origin are available. The frontend is built and stored privately, not publicly deployed.
 
 ## Person C
 
 ### Existing assigned responsibility
 
-Own the Next.js customer and reviewer portals, Cognito/Amplify frontend integration using the pool/client configuration supplied by Person B, API client and types, direct presigned S3 upload, customer status/history and reviewer decision UI, reusable UI components, and S3/CloudFront deployment.
+Own the React customer and reviewer portals, Cognito/Amplify frontend integration using the pool/client configuration supplied by Person B, API client and types, direct presigned S3 upload, customer status/history and reviewer decision UI, reusable UI components, and S3/CloudFront deployment.
 
 ### Implementation objective
 
@@ -37,17 +39,17 @@ Deliver a responsive, accessible frontend that implements the existing customer 
 - Inspect existing frontend/repository patterns before creating pages or replacing layouts.
 - Receive the API schema/error contract, API URL, and separate Cognito customer/reviewer public configuration from Person B; receive CloudFront and hosting-bucket details from Person A.
 - Resolve the auth flow, status vocabulary, dynamic case route/static export behavior, supported upload types, and API authorization contracts before wiring final pages.
-- Use only public Cognito IDs, region and API URL in `NEXT_PUBLIC_*`; no AWS credentials or private secrets belong in browser bundles.
+- Use only public Cognito IDs, region and API URL in `VITE_*`; no AWS credentials or private secrets belong in browser bundles.
 
 ### Step-by-step implementation plan
 
 #### C1. Bootstrap and verify the frontend shell
 
-- Create or extend the documented Next.js 14 App Router, React 18, TypeScript, Tailwind structure, preserving any existing design/layout conventions.
+- Create or extend the existing React 18, Vite, TypeScript and Tailwind structure, preserving the current design/layout conventions.
 - Create root layout, landing/login redirect behavior, navigation, shared error/loading/success components, and responsive foundations.
-- Configure Next.js 14 static export with `output: 'export'`; run `next build` to produce `out/` for S3/CloudFront. Do not use the removed `next export` command.
+- Run `npm run build` to type-check and produce the static `dist/` directory for S3/CloudFront.
 
-**Files/modules:** `app/`, shared layouts, `components/shared/`, `next.config.js`, Tailwind and TypeScript config.
+**Files/modules:** `src/`, shared layouts, components, `vite.config.ts`, Tailwind and TypeScript config.
 
 **Test and acceptance:** clean install/build/typecheck; route shell renders; no client/server import errors; mobile-width layout does not overflow; generated export contains expected static assets.
 
@@ -104,10 +106,10 @@ Deliver a responsive, accessible frontend that implements the existing customer 
 #### C7. Static deployment and route verification
 
 - Build the static export with the exact deployment environment variables; sync the generated export to Person A's private frontend bucket and invalidate CloudFront.
-- Verify all direct links and refreshes for customer and reviewer pages. Use the static detail page/query-parameter route agreed at the shared checkpoint for case IDs; do not depend on a runtime Next middleware or arbitrary dynamic route generation.
+- Verify all direct links and refreshes for customer and reviewer pages. Use the static detail page/query-parameter route agreed at the shared checkpoint for case IDs; do not depend on server-side routing or arbitrary dynamic route generation.
 - Confirm backend CORS allows the deployed CloudFront origin and browser requests include only public config plus tokens.
 
-**Test and acceptance:** `next build` with `output: 'export'` produces the expected `out/` tree from a clean environment; deployed CloudFront pages and static assets load; login, protected-page navigation, direct query-based case-detail links, API calls, and document preview work on the CDN domain; no build-time secret or local URL remains.
+**Test and acceptance:** `npm run build` produces the expected `dist/` tree from a clean environment; deployed CloudFront pages and static assets load; login, protected-page navigation, direct query-based case-detail links, API calls, and document preview work on the CDN domain; no build-time secret or local URL remains.
 
 ### Integration requirements/checkpoints
 

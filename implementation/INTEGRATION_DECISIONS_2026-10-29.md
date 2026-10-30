@@ -19,15 +19,16 @@ Person A selected these decisions under the project owner's instruction to make 
 | Notifications | No customer SNS topic. The worker sends generic SMS directly to the customer's phone via SNS plus email via SES after committed `AUTO_VERIFIED`. B sends reviewer-decision notifications to the customer: approval email; rejection email plus generic SMS; re-upload decision email. Do not notify on ordinary document submission. Messages contain no document values; delivery is best-effort, not exactly-once. | Backend SNS permission is region-scoped for direct-phone delivery; no topic ARN is used for customer SMS. Keep the foundation alarm SNS topic for operations only. B's account SMS spend limit remains to be checked before enabling customer SMS. |
 | Static frontend routes | Keep S3 + CloudFront static hosting. Use browser-side route checks and a static reviewer case-detail page that reads `caseId` from the query string. The API remains the authorization boundary. | C avoids Next middleware and runtime-generated dynamic case paths. CloudFront remains disabled until AWS account verification is complete. |
 
-## Current blockers to deployed end-to-end verification
+## Current release status — 2026-10-30
 
-- The foundation stack's IPv6 egress is deployed and its private AWS service path passed a read-only Lambda probe. No backend API or OCR worker is deployed yet.
-- RDS and its managed secret exist. A's initial read-only PostgreSQL TLS check found the schema empty. A later one-shot migration run applied the DATE-based migration and verified revision `001_initial_schema`, all nine expected application tables, and `customers.date_of_birth` as PostgreSQL `date`.
-- SES sender `armaansyed009@gmail.com` is now verified (`SUCCESS`), but the account lacks production access. The SMS attributes call remains unavailable because the account has no SMS service subscription; production email/SMS notification readiness is still pending.
-- Cognito customer/reviewer pools and clients exist; B reports the requested attributes are configured, with `gender` using the standard attribute. A's current local source aligns registration with that schema.
-- B has no API deployment change set yet. C's frontend source is in the repository, but the UI/CDN is not deployed; AWS account verification still blocks CloudFront.
-- Temporary connectivity/migration Lambdas are diagnostic only and are not part of the project deployment. The earlier database probe stack and the migration runner's function, ENIs, role, log group, and staged object version are absent after cleanup.
-- CloudFront creation remains gated by AWS account verification.
+- `pramana-dev-foundation` and the reviewed `pramana-dev-backend` stack are deployed; the OCR worker is Active with its SQS mapping Enabled. No NAT or interface endpoints were added. The private RDS catalog is at `001_initial_schema` with nine expected tables and `customers.date_of_birth` as PostgreSQL `DATE NOT NULL`.
+- The deployed synthetic workflow passed Cognito access-token auth, presigned S3 upload, API submit/SQS, worker OCR to `REVIEW_REQUIRED`, reviewer queue/detail, `REUPLOAD_REQUESTED`, customer `REUPLOAD_PENDING`, and audit persistence. The blank Aadhaar PNG and `.invalid` identities were synthetic; the SES attempt was rejected and audited. Test rows, users, object version, runner, and staged artifact were cleaned up.
+- Local checks: backend 36 passed, OCR 36 passed/1 optional PostgreSQL test skipped, frontend 5 passed, production build passed, and `npm audit --omit=dev` reported zero vulnerabilities. Focused cfn-guard checks passed, with the intrinsic S3 TLS policy condition skipped and manually inspected.
+- CloudFront remains disabled because AWS account verification rejected distribution creation. The frontend is in the private S3 bucket and not publicly reachable. API/document CORS currently allows `http://localhost:3000`; set the CloudFront origin after account verification and distribution creation.
+- SES identity is verified, but production access is disabled. SNS SMS service subscription/use/spending configuration is unresolved. No real email or SMS delivery is verified.
+- Remaining acceptance is public CloudFront hosting, final CORS, browser registration/confirmation and customer/reviewer UI checks, and notification delivery after provider access is resolved. The deployed API → S3 → SQS → OCR → RDS → reviewer → audit path is already integration-tested with synthetic data.
+
+The detailed sections below preserve the original 2026-10-29 diagnostic and contract history; use this status for current deployment state.
 
 ## Revalidation (2026-10-29)
 

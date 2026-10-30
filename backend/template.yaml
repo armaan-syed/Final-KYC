@@ -94,6 +94,11 @@ Parameters:
     Type: String
     Description: SES verified sender identity ARN
 
+  FrontendOrigin:
+    Type: String
+    Default: http://localhost:3000
+    Description: Comma-separated browser origins allowed to call the API; use the deployed CloudFront origin in production.
+
 Transform: AWS::Serverless-2016-10-31
 
 Resources:
@@ -121,11 +126,12 @@ Resources:
           S3_DOCUMENTS_BUCKET: !Ref DocumentsBucket
           SQS_QUEUE_URL: !Ref SQSQueueUrl
           SES_SENDER_EMAIL: !Ref SESSenderEmail
-          API_BASE_URL: !Sub https://${ApiGatewayApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+          FRONTEND_ORIGIN: !Ref FrontendOrigin
       VpcConfig:
         SecurityGroupIds:
           - !Ref BackendLambdaSecurityGroupId
         SubnetIds: !Ref PrivateSubnetIds
+        Ipv6AllowedForDualStack: true
       Layers:
         - !Ref SharedNotificationsLayerArn
       Policies:
@@ -182,12 +188,8 @@ Resources:
     Properties:
       Name: !Sub pramana-kyc-api-${Environment}
       StageName: !Ref Environment
-      DefinitionBody:
-        openapi: "3.0.1"
-        info:
-          title: Pramāṇa KYC API
-          version: 1.0.0
-        paths: {}
+      # Let SAM generate its OpenAPI proxy methods from the Function Api events.
+      # FastAPI's CORSMiddleware handles OPTIONS and all browser CORS headers.
 
 Outputs:
   ApiUrl:

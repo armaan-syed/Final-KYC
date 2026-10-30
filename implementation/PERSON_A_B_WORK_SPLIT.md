@@ -1,17 +1,18 @@
 # Pramāṇa — Person A / Person B Work Split
 
-**Updated:** 2026-10-29
+**Updated:** 2026-10-30
 **Canonical integration contract:** [`INTEGRATION_DECISIONS_2026-10-29.md`](INTEGRATION_DECISIONS_2026-10-29.md)
 
 Person A selected the remaining cross-person decisions at the project owner's direction. The contract is binding for implementation; no design vote is pending.
 
 ## Current deployment snapshot
 
-- A's `pramana-dev-foundation` is deployed in `us-east-1`; NAT is absent, OCR and CloudFront are disabled, and the free S3 gateway endpoint remains.
+- A's `pramana-dev-foundation` is `UPDATE_COMPLETE` in `us-east-1`; NAT and interface endpoints are absent, OCR is enabled, CloudFront is disabled, and the free S3 gateway endpoint remains.
 - B's private RDS instance and customer/reviewer Cognito pools and clients exist. On 2026-10-29 A applied the current Alembic migration using a one-shot Lambda and verified revision `001_initial_schema`, all nine expected tables, and `customers.date_of_birth` as PostgreSQL `date`.
-- There is no deployed backend API/Lambda, OCR worker, or CloudFront distribution. SES sender `armaansyed009@gmail.com` is verified (`SUCCESS`), but SES production access is disabled. B has not supplied an API deployment change set for review.
+- B's separate reviewed API change set was executed; `pramana-dev-backend` is `CREATE_COMPLETE` and `/health` returns 200 at `https://rimait7lg7.execute-api.us-east-1.amazonaws.com/dev`. The OCR worker is Active and its SQS mapping is Enabled. CloudFront is the only missing deployed application component; AWS account verification blocked its creation.
 - A's egress-only IPv6 path is deployed. Temporary private Lambda probes verified Secrets Manager, SQS, SNS, Cognito, SES, and PostgreSQL TLS connectivity without NAT or interface endpoints. The migration runner function, both Lambda-managed ENIs, staged ZIP version, log group, and temporary IAM role have all been removed after the successful run.
-- A reviewed B's authorization boundary and changed the local implementation to validate Cognito access tokens at FastAPI. The network path and live schema are ready for B's API deployment preparation. The exact cause of the earlier generic runner provisioning failure remains unproven; the successful retry did not require broad IAM permissions.
+- On 2026-10-30 a synthetic live workflow passed access-token auth, presigned S3 upload, SQS, OCR to `REVIEW_REQUIRED`, reviewer queue/detail/decision, customer status, and audit. The `.invalid` notification attempt was rejected and audited. Test users, DB rows, the exact S3 object version, and temporary runner resources were removed.
+- The frontend build is in the private encrypted S3 bucket and remains inaccessible until CloudFront is available. CORS currently allows only `http://localhost:3000`; update API and document-bucket CORS after the CloudFront hostname exists. SES production access and SNS SMS service subscription remain unresolved.
 
 ## Ownership
 
@@ -34,14 +35,14 @@ Person A selected the remaining cross-person decisions at the project owner's di
 - Database SG: `sg-02235e74a0e910c37`; backend SG: `sg-02823dd2442632bed`; worker SG: `sg-0751ba5b887acb41c`. Database ingress is TCP 5432 only from backend and worker SGs.
 - Document bucket: `pramana-dev-foundation-documentbucket-r77xgfetn3cj`.
 - OCR queue URL: `https://sqs.us-east-1.amazonaws.com/682197558335/pramana-dev-foundation-OCRQueue-LrTO9SM80mE2`; ARN: `arn:aws:sqs:us-east-1:682197558335:pramana-dev-foundation-OCRQueue-LrTO9SM80mE2`.
-- Shared notification/RDS CA layer ARN: `arn:aws:lambda:us-east-1:682197558335:layer:pramana-dev-shared-notifications:2`.
+- Latest shared notification/RDS CA layer output is v7 (the deployed OCR worker uses v7; the API currently uses retained v5): `arn:aws:lambda:us-east-1:682197558335:layer:pramana-dev-shared-notifications:7`.
 - On 2026-10-29, temporary read-only Lambda probes in the shared private subnets successfully called Secrets Manager, SQS, SNS, both Cognito pools, and SES, then connected to PostgreSQL with `sslmode=verify-full`. The initial DB probe found no tables; the later one-shot migration result is recorded below. B's backend template sets `Ipv6AllowedForDualStack: true` and uses dual-stack endpoints for SQS/SNS/SES.
 
 ## B-to-A/C handoff
 
 - Customer Cognito pool `us-east-1_8Q9onMEne`, client `1rtg8t1nbggjsf2i0d8g7jqqov`; reviewer pool `us-east-1_IQzz0ktCu`, client `5fh52722t9o0le48pieqavtcv0`. More detail: [`../backend/COGNITO_OUTPUTS.md`](../backend/COGNITO_OUTPUTS.md). These are public identifiers, not secrets.
 - RDS endpoint `pramana-dev-database-db.citogy2m6wxr.us-east-1.rds.amazonaws.com`, port `5432`, database `pramana_kyc`; secret ARN `arn:aws:secretsmanager:us-east-1:682197558335:secret:rds!db-3d281b6c-5013-4ee5-abc6-2970ac631d50-Cb3oaQ`. Never publish the secret value.
-- Pending: backend API URL/Lambda, SES production access, SNS SMS service subscription/spend-limit check, and reviewed B-owned API change set. The live migration/catalog and SES sender identity are verified. The SMS attributes call fails because the account has no subscription for that service.
+- API URL: `https://rimait7lg7.execute-api.us-east-1.amazonaws.com/dev`; see [`../backend/COGNITO_OUTPUTS.md`](../backend/COGNITO_OUTPUTS.md) for pool/client outputs. Remaining: CloudFront/account verification, final CORS, browser UI acceptance, SES production access, and SNS SMS service/use/spending setup. The SMS attributes call fails because the account lacks the service subscription.
 - B reports the customer pool's required custom attributes are configured; `gender` is the standard Cognito attribute. Live read shows SRP is enabled on both clients; customer password auth is also enabled, reviewer password auth is not. The frontend uses Amplify SRP.
 
 ## Migration runner verification for Person B (2026-10-29)
@@ -74,8 +75,8 @@ Person A selected the remaining cross-person decisions at the project owner's di
 
 ## Immediate owner actions
 
-- **B:** prepare the API change set for review; deploy the API after review; resolve SES production access and SMS service/spend prerequisites; then test API → SQS → RDS. The live migration/catalog and sender identity are already verified.
-- **C:** align UI state/badges with case and attempt statuses, resolve frontend dependency audit findings, complete production build/browser verification, and integrate against B's deployed API.
-- **A:** the migration and SES sender identity are verified. Keep the OCR worker disabled until B's actual change set is reviewed and SES production/SMS prerequisites are ready for the intended test; then run the deployed upload → SQS → OCR → RDS → API/UI → reviewer/audit/notification workflow. CloudFront waits on AWS account verification.
+- **B/account owner:** request SES production access and resolve SNS SMS subscription/use/spending prerequisites before testing real delivery. API change-set review, migration, and API-to-worker workflow are complete.
+- **C:** after AWS account verification enables CloudFront, publish the private static site through the reviewed distribution and run browser registration/confirmation, customer/reviewer auth, upload, status, and audit checks. Update API and document-bucket CORS to the CloudFront hostname.
+- **A:** keep NAT and paid interface endpoints absent; after CloudFront/account verification, review the production CORS update and finish the output handoff. The deployed OCR worker and API-to-reviewer flow are already tested with synthetic data.
 
 These are deployment and verification actions, not open contract decisions. Do not claim end-to-end integration from local tests or a temporary network probe.

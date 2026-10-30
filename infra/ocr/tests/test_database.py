@@ -207,6 +207,43 @@ class DatabaseRepositoryTests(unittest.TestCase):
         repository._get_secret()
         client.get_secret_value.assert_called_once_with(SecretId="secret-arn")
 
+    def test_database_host_falls_back_to_configured_rds_endpoint(self):
+        client = Mock()
+        client.get_secret_value.return_value = {
+            "SecretString": '{"username":"worker","password":"secret"}'
+        }
+        repository = PostgresRepository(
+            secret_arn="secret-arn", database_name="pramana_kyc", secrets_client=client
+        )
+        with patch.dict("os.environ", {"DATABASE_HOST": "db.internal"}):
+            self.assertEqual(repository._get_secret()["host"], "db.internal")
+
+    def test_database_secret_host_overrides_configured_fallback(self):
+        client = Mock()
+        client.get_secret_value.return_value = {
+            "SecretString": '{"host":"secret.internal","username":"worker","password":"secret"}'
+        }
+        repository = PostgresRepository(
+            secret_arn="secret-arn", database_name="pramana_kyc", secrets_client=client
+        )
+        with patch.dict("os.environ", {"DATABASE_HOST": "db.internal"}):
+            self.assertEqual(repository._get_secret()["host"], "secret.internal")
+
+    def test_database_secret_requires_host_when_no_fallback_is_configured(self):
+        client = Mock()
+        client.get_secret_value.return_value = {
+            "SecretString": '{"username":"worker","password":"secret"}'
+        }
+        repository = PostgresRepository(
+            secret_arn="secret-arn", database_name="pramana_kyc", secrets_client=client
+        )
+        with patch.dict("os.environ", {}, clear=False):
+            import os
+
+            os.environ.pop("DATABASE_HOST", None)
+            with self.assertRaisesRegex(ValueError, "missing host"):
+                repository._get_secret()
+
     def test_database_connection_requires_verified_rds_tls(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
             ca_file = Path(temporary_dir) / "global-bundle.pem"
