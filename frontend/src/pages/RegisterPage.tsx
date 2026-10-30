@@ -6,6 +6,8 @@ import * as z from 'zod';
 import { ShieldCheck, ArrowRight, Lock, Building2, UserPlus, Info } from 'lucide-react';
 import { apiRegister, getApiErrorMessage } from '@/lib/api';
 import { ErrorAlert } from '@/components/ui/Alerts';
+import { SearchableSelect } from '@/components/ui/SearchableSelect';
+import { ALL_INDIAN_STATES, INDIAN_STATES_AND_CITIES } from '@/lib/indiaLocations';
 
 const registerSchema = z
   .object({
@@ -37,14 +39,25 @@ export default function RegisterPage() {
   const {
     register,
     handleSubmit,
+    setValue,
+    watch,
     formState: { errors },
   } = useForm<RegisterFormData>({
     resolver: zodResolver(registerSchema),
     defaultValues: {
       gender: 'Male',
       phone_number: '+91',
+      state: '',
+      city: '',
     },
   });
+
+  const selectedState = watch('state');
+  const selectedCity = watch('city');
+
+  const availableCities = selectedState && INDIAN_STATES_AND_CITIES[selectedState]
+    ? INDIAN_STATES_AND_CITIES[selectedState]
+    : [];
 
   const onSubmit = async (data: RegisterFormData) => {
     setErrorMessage(null);
@@ -210,29 +223,33 @@ export default function RegisterPage() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">City *</label>
-                    <input
-                      type="text"
-                      {...register('city')}
-                      placeholder="e.g. Mumbai"
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-sbi-accent focus:outline-none"
+                    <SearchableSelect
+                      label="State"
+                      required
+                      value={selectedState}
+                      options={ALL_INDIAN_STATES}
+                      placeholder="Select State"
+                      error={errors.state?.message}
+                      onChange={(val) => {
+                        setValue('state', val, { shouldValidate: true });
+                        setValue('city', '', { shouldValidate: true });
+                      }}
                     />
-                    {errors.city && (
-                      <p className="text-xs text-rose-600 mt-1">{errors.city.message}</p>
-                    )}
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">State *</label>
-                    <input
-                      type="text"
-                      {...register('state')}
-                      placeholder="e.g. Maharashtra"
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-sbi-accent focus:outline-none"
+                    <SearchableSelect
+                      label="City"
+                      required
+                      value={selectedCity}
+                      options={availableCities}
+                      disabled={!selectedState}
+                      placeholder={selectedState ? 'Select City' : 'Select State first'}
+                      error={errors.city?.message}
+                      onChange={(val) => {
+                        setValue('city', val, { shouldValidate: true });
+                      }}
                     />
-                    {errors.state && (
-                      <p className="text-xs text-rose-600 mt-1">{errors.state.message}</p>
-                    )}
                   </div>
 
                   <div>

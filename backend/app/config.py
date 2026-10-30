@@ -4,11 +4,15 @@ Never log or return secret values. All required settings are validated
 at startup; missing required values raise a clear, non-secret error.
 """
 
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import List
 
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings
+
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
@@ -60,7 +64,7 @@ class Settings(BaseSettings):
     presigned_get_url_expiry_seconds: int = 900
 
     model_config = {
-        "env_file": ".env",
+        "env_file": (_BACKEND_DIR / ".env", ".env"),
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
         "extra": "ignore",

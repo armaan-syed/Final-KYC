@@ -6,6 +6,33 @@ import {
 } from 'aws-amplify/auth';
 import { LoginRequest, LoginResponse } from '@/types';
 
+// Hardcoded admin credentials for reviewer/admin login
+const HARDCODED_ADMINS: Record<string, { password: string; name: string }> = {
+  'attherate1807@gmail.com': { password: 'admin', name: 'Admin – Attherate' },
+  'adityasable4510@gmail.com': { password: 'admin', name: 'Admin – Aditya Sable' },
+  'armaansyed009@gmail.com': { password: 'admin', name: 'Admin – Armaan Syed' },
+};
+
+function tryHardcodedAdmin(email: string, password: string): LoginResponse | null {
+  const entry = HARDCODED_ADMINS[email.toLowerCase().trim()];
+  if (!entry || entry.password !== password) return null;
+
+  const now = Date.now();
+  return {
+    access_token: `admin-jwt-${now}`,
+    id_token: `admin-id-${now}`,
+    refresh_token: `admin-refresh-${now}`,
+    token_type: 'Bearer',
+    expires_in: 86400,
+    user: {
+      sub: `admin-${email}`,
+      email,
+      name: entry.name,
+      role: 'reviewer',
+    },
+  };
+}
+
 // Detect whether to use client-side mock adapter
 export const isMockEnabled = (): boolean => {
   if (typeof window !== 'undefined') {
@@ -44,6 +71,14 @@ export const configureAmplify = (role: 'customer' | 'reviewer' = 'customer') => 
 };
 
 export async function getAccessToken(): Promise<string> {
+  // Return stored token for hardcoded admin sessions
+  if (typeof window !== 'undefined') {
+    const storedToken = localStorage.getItem('pramana_access_token');
+    if (storedToken && storedToken.startsWith('admin-jwt-')) {
+      return storedToken;
+    }
+  }
+
   if (isMockEnabled()) {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('pramana_access_token') || 'mock-jwt-token-active-session';
@@ -70,6 +105,18 @@ export async function getCurrentUserRole(): Promise<'customer' | 'reviewer' | nu
 }
 
 export async function loginUser(req: LoginRequest, role: 'customer' | 'reviewer' = 'customer'): Promise<LoginResponse> {
+  // ── Hardcoded admin bypass (checked first, before mock or Cognito) ──
+  const adminResult = tryHardcodedAdmin(req.email, req.password);
+  if (adminResult) {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('pramana_access_token', adminResult.access_token);
+      localStorage.setItem('pramana_user_role', 'reviewer');
+      localStorage.setItem('pramana_user_email', adminResult.user.email);
+      localStorage.setItem('pramana_user_name', adminResult.user.name || '');
+    }
+    return adminResult;
+  }
+
   if (isMockEnabled()) {
     const mockRes: LoginResponse = {
       access_token: `mock-jwt-${role}-token-${Date.now()}`,
@@ -127,6 +174,10 @@ export async function loginUser(req: LoginRequest, role: 'customer' | 'reviewer'
 }
 
 export async function logoutUser() {
+  const isAdminSession =
+    typeof window !== 'undefined' &&
+    (localStorage.getItem('pramana_access_token') || '').startsWith('admin-jwt-');
+
   if (typeof window !== 'undefined') {
     localStorage.removeItem('pramana_access_token');
     localStorage.removeItem('pramana_user_role');
@@ -134,7 +185,7 @@ export async function logoutUser() {
     localStorage.removeItem('pramana_user_name');
   }
 
-  if (!isMockEnabled()) {
+  if (!isAdminSession && !isMockEnabled()) {
     try {
       await amplifySignOut();
     } catch {
