@@ -19,7 +19,7 @@ import { ErrorAlert } from '@/components/ui/Alerts';
 
 const loginSchema = z.object({
   email: z.string().email('Please enter a valid official email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  password: z.string().min(1, 'Password is required'),
   role: z.enum(['customer', 'reviewer']),
 });
 
@@ -51,8 +51,10 @@ export default function LoginPage() {
     setErrorMessage(null);
     setLoading(true);
     try {
-      await loginUser({ email: data.email, password: data.password }, data.role);
-      if (data.role === 'reviewer') {
+      const result = await loginUser({ email: data.email, password: data.password }, data.role);
+      // Navigate based on the role returned by auth (admin bypass always returns 'reviewer')
+      const effectiveRole = result.user.role || data.role;
+      if (effectiveRole === 'reviewer') {
         navigate('/reviewer/dashboard');
       } else {
         navigate('/dashboard');

@@ -9,17 +9,30 @@ from app.routers import auth, customer, kyc, reviewer
 
 app = FastAPI(title="Pramāṇa API", version="1.0.0")
 
-allowed_origins = [
+configured_origins = [
     origin.strip()
     for origin in settings.frontend_origin.split(",")
     if origin.strip()
 ]
+# Ensure standard local Vite dev ports and headers are always permitted in development
+allowed_origins = list(
+    set(
+        configured_origins
+        + [
+            "http://localhost:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:5173",
+        ]
+    )
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
     max_age=300,
 )
 
