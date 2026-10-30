@@ -157,13 +157,17 @@ the shared VPC and database security group. The dev stack is now deployed as
 `db.t4g.micro`, 20 GiB, single-AZ, and has one-day automated backup retention to
 fit the account's Free Plan. It is encrypted and not publicly accessible.
 
-Person A deployed outbound-only IPv6 egress without NAT or interface endpoints.
-A temporary read-only Lambda in the same private subnets successfully called
-Secrets Manager, SQS, SNS, Cognito, and SES APIs. This verifies the service
-network path, not B's deployed backend Lambda, secret retrieval, RDS connection,
-or migration. The workstation has no route to private RDS, so apply the Alembic
-migration from a controlled runner inside the approved VPC before API/worker
-deployment.
+**Current deployed checkpoint (2026-10-30):** the live migration is verified at
+`001_initial_schema` (nine application tables; `customers.date_of_birth` is
+`DATE NOT NULL`). The reviewed API is deployed at
+`https://rimait7lg7.execute-api.us-east-1.amazonaws.com/dev`, and the synthetic
+API → S3 → SQS → OCR → RDS → reviewer/audit flow has passed. The API and worker
+run in the shared private VPC with IPv6 egress; no NAT or interface endpoints
+are deployed. CloudFront is still blocked by AWS account verification. SES
+sender verification is complete, but SES production access and the SNS SMS
+service/use/spending setup remain unresolved, so real notification delivery is
+not verified. See [`IMPLEMENTATION_HANDOFF.md`](IMPLEMENTATION_HANDOFF.md) for
+the detailed evidence and remaining release gates.
 
 For any new environment, obtain and review:
 
@@ -198,8 +202,9 @@ Before deploying, coordinate these non-secret outputs and references:
 - From B: RDS endpoint/port/database name and Secrets Manager ARN, Cognito
   customer/reviewer pool and app-client IDs, SES sender identity, and API outputs.
 - SMS is direct-to-phone through the shared notification module; do not use the
-  foundation alarm topic for customer notifications. SES sender identity is
-  still pending a verified sender address/domain.
+  foundation alarm topic for customer notifications. The sender identity
+  `armaansyed009@gmail.com` is verified; SES production access and SNS SMS
+  service/use/spending configuration remain pending.
 
 The RDS endpoint and secret ARN are supplied by the Person B database stack.
 Never put the database password in this README, chat, or source control.
@@ -207,7 +212,8 @@ Never put the database password in this README, chat, or source control.
 ## Security
 
 - `.env` is git-ignored — never commit real credentials
-- Cognito secrets are never in `NEXT_PUBLIC_*` variables
+- Browser configuration uses `VITE_*` variables, which are public build-time
+  values; never put credentials or secret values in them.
 - S3 keys are server-derived (no client-controlled paths)
 - Presigned URLs are short-lived
 - Cognito access tokens verified via JWKS, issuer, expiry, `token_use`, and the

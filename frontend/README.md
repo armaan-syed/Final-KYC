@@ -1,90 +1,50 @@
-# Pramāṇa Frontend (Person C)
+# Pramāṇa KYC frontend
 
-Production-ready Next.js 14 App Router frontend for the Pramāṇa Automated KYC Platform. Includes separate Customer and Reviewer portals, AWS Amplify/Cognito authentication, direct S3 presigned document uploads, OCR comparison views, reviewer decision forms, and mock adapters.
+The active frontend is a **React 18 + TypeScript + Vite** single-page application. It has customer and reviewer portals, Cognito sign-in through Amplify, backend registration/confirmation, direct S3 uploads, KYC status/history, reviewer decisions, and audit views.
 
----
+## Configuration
 
-## 1. Features Implemented
+Copy `.env.example` to `.env.local` for local development. The supported public build variables are:
 
-### Architecture & Design System
-- **Next.js 14 App Router + React 18 + TypeScript + Tailwind CSS**
-- Consistent banking aesthetic: Deep Navy (`#0b2545`), clean white surfaces, subtle borders, accessible contrast.
-- Static export compatible (`output: 'export'`) for S3 + CloudFront hosting.
-- Query-parameter based routing for case details (`/reviewer/cases/detail/?caseId=...`) to ensure full CDN compatibility.
+| Variable | Purpose |
+|---|---|
+| `VITE_API_BASE_URL` | FastAPI base URL, including its stage path (for example, `https://…execute-api.us-east-1.amazonaws.com/dev`) |
+| `VITE_COGNITO_CUSTOMER_USER_POOL_ID` / `VITE_COGNITO_CUSTOMER_CLIENT_ID` | Customer Cognito pool and public app client |
+| `VITE_COGNITO_REVIEWER_USER_POOL_ID` / `VITE_COGNITO_REVIEWER_CLIENT_ID` | Reviewer Cognito pool and public app client |
+| `VITE_USE_MOCKS` | `true` for the local mock experience; `false` for real Cognito/API/S3 integration |
 
-### Authentication
-- Dual Customer and Reviewer sign-in support.
-- Email verification / confirmation page (`/confirm?email=...`) matching Cognito OTP flow.
-- Reviewer self-registration disabled.
-- Route protection checking role and active session.
+The AWS region is inferred from the Cognito user-pool IDs. Only public configuration belongs in `VITE_*` variables: Vite embeds them in browser assets. Never put database credentials, AWS access keys, secret ARNs, or Cognito client secrets in frontend configuration.
 
-### Customer Portal
-- **Dashboard (`/dashboard`)**: Welcome banner, active Case ID, current KYC status badge, registered profile details, and automatic polling during `PROCESSING` state every 10 seconds.
-- **Upload (`/kyc/upload`)**: Select document type (Aadhaar / PAN), upload file (JPEG, PNG, PDF), preview, direct-to-S3 PUT upload with real-time progress bar, and completion submission.
-- **Status & History (`/kyc/status`)**: Latest attempt details, field mismatch highlights, and reviewer rejection reasons.
+## Run locally
 
-### Reviewer Portal
-- **Dashboard (`/reviewer/dashboard`)**: KPI statistics (Pending Reviews, Auto Verified Today, Approved Today, Rejected Today) with 60-second polling.
-- **Review Queue (`/reviewer/queue`)**: Paginated list of flagged cases, mismatch badges, search by name/case, and document type filters.
-- **Case Detail (`/reviewer/cases/detail`)**: Side-by-side comparison between customer database records and OCR extracted fields, short-lived S3 document preview, reviewer notes, decision actions (`Approve`, `Reject`, `Request Re-upload`), and full audit history.
-
----
-
-## 2. Mock vs Real Integrations
-
-The frontend includes mock adapters so that the UI can be run and tested without active AWS credentials:
-- **Toggle**: Controlled via `NEXT_PUBLIC_USE_MOCKS=true` in `frontend/.env.local` or `.env.example`.
-- **When `NEXT_PUBLIC_USE_MOCKS=false`**:
-  - `src/lib/auth.ts` uses Amplify Cognito for customer/reviewer sign-in, access-token sessions, refresh, and sign-out.
-  - `src/lib/api.ts` uses FastAPI for customer registration/confirmation and protected `/customer`, `/kyc`, and `/reviewer` calls.
-  - S3 upload directly PUTs the document to the presigned S3 URL.
-
----
-
-## 3. Step-by-Step Integration with Person B (FastAPI) and Person A (AWS Infra)
-
-| Feature | Mock in Code | Real Endpoint (Person B) / Resource (Person A) | Request / Payload |
-|---|---|---|---|
-| Customer Registration | `apiRegister` in `api.ts` | `POST /auth/register` | `{ full_name, date_of_birth, gender, phone_number, email, password, address_line1, address_line2?, city, state, pincode }` |
-| Email Confirmation | `apiConfirm` in `api.ts` | `POST /auth/confirm` | `{ email, confirmation_code }` |
-| Login (Customer/Reviewer) | `loginUser` in `auth.ts` | Amplify Cognito SRP (no backend login route) | `{ email, password }`; role selects the configured pool/client |
-| Customer Profile | `apiGetProfile` in `api.ts` | `GET /customer/profile` | Bearer token |
-| KYC Status | `apiGetKYCStatus` in `api.ts` | `GET /customer/kyc/status` | Bearer token |
-| Presigned Upload URL | `apiGetUploadUrl` in `api.ts` | `POST /kyc/upload-url` | `{ document_type, file_name, content_type }` |
-| Direct S3 Upload | `directUploadToS3` in `api.ts` | S3 Presigned URL (Person A bucket) | HTTP PUT with `Content-Type` header |
-| Submit KYC Case | `apiSubmitKYC` in `api.ts` | `POST /kyc/submit` | `{ s3_key, document_type, file_name, file_size_bytes }` |
-| Reviewer Dashboard | `apiGetReviewerDashboard` in `api.ts` | `GET /reviewer/dashboard` | Reviewer Bearer token |
-| Review Queue | `apiGetReviewQueue` in `api.ts` | `GET /reviewer/queue` | Reviewer Bearer token |
-| Case Detail | `apiGetCaseDetail` in `api.ts` | `GET /reviewer/cases/{case_id}` | Reviewer Bearer token |
-| Submit Decision | `apiSubmitDecision` in `api.ts` | `POST /reviewer/cases/{case_id}/decide` | `{ decision: 'APPROVED' \| 'REJECTED' \| 'REUPLOAD_REQUESTED', notes }` |
-
-The frontend sends Cognito **access tokens** on protected calls. FastAPI
-validates the pool issuer, signature, expiry, `token_use`, and app-client ID;
-the API Gateway REST API does not add another authorizer. The backend does not
-issue or refresh tokens. The upload contract accepts JPEG/PNG/PDF up to 10 MiB
-and a maximum of 3 PDF pages.
-
----
-
-## 4. Local Execution & Safe Git Commands
-
-### Running Locally
 ```bash
 cd frontend
+npm ci
+cp .env.example .env.local
+# Keep VITE_API_BASE_URL=http://localhost:8000 for the local backend.
 npm run dev
-# Open http://localhost:3000 in your browser
 ```
 
-### Static Build
+Vite serves the app at `http://localhost:3000`. The API must allow this origin through its CORS configuration. For an offline UI walkthrough, set `VITE_USE_MOCKS=true`; for AWS integration, use `false` and a reachable API URL.
+
+## Check and build
+
 ```bash
-cd frontend
+npm test
 npm run build
-# Generates the static export in frontend/out/ ready for S3 sync
 ```
 
-### Git Commit & Push
-```bash
-git add frontend/
-git commit -m "feat(frontend): implement Person C customer and reviewer portals with Next.js 14 and Amplify auth"
-git push origin master
-```
+The production static site is written to `frontend/dist/`. Build with `VITE_USE_MOCKS=false` and the deployment API/Cognito values. Review the generated bundle before publishing; all `VITE_*` values are public.
+
+The AWS deployment uses the private S3 frontend bucket behind CloudFront Origin Access Control. The CloudFormation distribution maps S3 403/404 responses to `/index.html` so React Router routes work on direct navigation and refresh. CloudFront creation currently requires AWS account verification; until then, the assets can be staged in private S3 but the site is not publicly reachable. After a distribution is available, use its HTTPS origin in both API CORS and the document bucket's upload CORS before browser testing.
+
+## Integration contracts
+
+- Customer registration and email confirmation call backend `POST /auth/register` and `POST /auth/confirm`; the backend writes the Cognito attributes and creates the customer database record after confirmation.
+- Customer and reviewer sign-in/session refresh/sign-out use Amplify with separate Cognito pools. Reviewer self-registration is disabled; reviewers must be provisioned by an administrator.
+- Protected API calls send the Cognito access token. FastAPI validates the issuer, signature, expiry, token use, app client, and customer/reviewer role.
+- Uploads request a presigned URL from `POST /kyc/upload-url`, PUT the file directly to S3 with its MIME type, then call `POST /kyc/submit` to enqueue processing.
+- Supported documents are JPEG, PNG, or PDF up to 10 MiB; PDF processing is limited to three pages. Backend S3 metadata checks are authoritative.
+- Reviewer details use `/reviewer/cases/detail?caseId=…` so the static site does not depend on generated dynamic files.
+
+See [`../implementation/PERSON_C_IMPLEMENTATION_PLAN.md`](../implementation/PERSON_C_IMPLEMENTATION_PLAN.md) and [`../implementation/INTEGRATION_DECISIONS_2026-10-29.md`](../implementation/INTEGRATION_DECISIONS_2026-10-29.md) for current test evidence, status mapping, and release gates.

@@ -1,5 +1,12 @@
 # Pramāṇa — Person C Workload
-## React / Next.js Frontend · Customer Portal · Reviewer Portal
+## Original framework proposal · Customer Portal · Reviewer Portal
+
+> This is the original assignment brief. Its Next.js examples describe the
+> proposed starting design and are not the active implementation. The checked-in
+> `master` frontend is React 18 + TypeScript + Vite; use
+> [`../frontend/README.md`](../frontend/README.md) and
+> [`../implementation/PERSON_C_IMPLEMENTATION_PLAN.md`](../implementation/PERSON_C_IMPLEMENTATION_PLAN.md)
+> for the runnable configuration and current status.
 
 > Person C owns everything the user sees. This includes the customer-facing portal (registration, login, document upload, KYC status) and the reviewer portal (dashboard, case queue, case detail, decision actions). You consume the API defined by Person B and deploy to S3 + CloudFront provisioned by Person A.
 

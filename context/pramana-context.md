@@ -2,6 +2,12 @@
 
 > This document is the single source of truth for all ideation, design decisions, and architecture decisions made for the Pramāṇa KYC Verification System. It should be updated as new decisions are made.
 
+> **Implementation status:** this is the original product/architecture brief.
+> The active frontend on `master` is React 18 + TypeScript + Vite (not the
+> Next.js framework described in the initial proposal). Current integration,
+> deployment, and owner status is tracked in
+> [`implementation/FINAL_PROJECT_INTEGRATION.md`](../implementation/FINAL_PROJECT_INTEGRATION.md).
+
 ---
 
 ## 1. Project Overview

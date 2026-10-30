@@ -6,7 +6,7 @@ Person A selected these decisions under the project owner's instruction to make 
 
 | Area | Selected behavior | Owner follow-through |
 |---|---|---|
-| Private Lambda egress and cost | Use dual-stack private subnets and one egress-only Internet Gateway. Keep NAT disabled and do not add paid interface endpoints. The gateway has no hourly fee; outbound data transfer can be billed. Lambda security groups allow IPv6 TCP 443 only; existing IPv4 egress has no public IPv4 route. S3 remains on the free gateway endpoint. Four interface endpoints across two AZs would cost about $58.40/month in fixed hourly charges, before data processing. | A verified the dual-stack path from temporary private Lambdas: read-only API calls to Secrets Manager, SQS, SNS, Cognito, and SES succeeded, then a separate read-only probe retrieved the RDS-managed username/password and connected to PostgreSQL with `sslmode=verify-full`. No NAT, endpoint, or security-group changes were needed. The first probe was removed; teardown of the second is in progress after testing. |
+| Private Lambda egress and cost | Use dual-stack private subnets and one egress-only Internet Gateway. Keep NAT disabled and do not add paid interface endpoints. The gateway has no hourly fee; outbound data transfer can be billed. Lambda security groups allow IPv6 TCP 443 only; existing IPv4 egress has no public IPv4 route. S3 remains on the free gateway endpoint. Four interface endpoints across two AZs would cost about $58.40/month in fixed hourly charges, before data processing. | A verified the dual-stack path and PostgreSQL TLS access through temporary private Lambdas, then removed the probes and temporary resources. The deployed API and OCR worker subsequently passed the synthetic integration workflow. No NAT, interface endpoint, or security-group expansion was needed. |
 | Upload-to-worker trigger | `POST /kyc/submit` is the only producer. Do not add an S3 event notification. Queue remains standard and has the six fields already in the worker contract. | B sends one job after committing the document and attempt. A worker remains idempotent under SQS redelivery. |
 | Attempt/key lifecycle | `/kyc/upload-url` allocates and persists the attempt before upload. Its key is `documents/{customer_id}/{attempt_id}/{file_name}`. `/kyc/submit` verifies the uploaded S3 object's metadata, commits the document row, then sends SQS. | C uploads directly to the returned presigned URL and submits the same key and file name. Abandoned pre-upload attempts remain `PROCESSING`. |
 | DB/SQS recovery | Do not add an outbox for the college demo. If the DB commit succeeds and SQS send fails, return an error and keep the attempt `PROCESSING`; the client retries the same submit request. Duplicate queue messages are safe because worker persistence locks by attempt. | B/C retry the same attempt and key. Do not allocate a second attempt unless the reviewer requested re-upload. |
@@ -30,7 +30,12 @@ Person A selected these decisions under the project owner's instruction to make 
 
 The detailed sections below preserve the original 2026-10-29 diagnostic and contract history; use this status for current deployment state.
 
-## Revalidation (2026-10-29)
+## Historical diagnostics (2026-10-29)
+
+The notes in this section preserve the earlier migration-runner failures and
+pre-deployment snapshot. They are superseded by the current release status
+above: the live migration, API deployment, OCR worker, and synthetic API-to-
+reviewer workflow are now verified.
 
 ### Person B migration-runner connectivity check
 
