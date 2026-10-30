@@ -35,6 +35,44 @@ The result contains only:
 
 Expected handoff state is revision `001_initial_schema`, nine application tables, and `customers.date_of_birth` as `date` with `NO` for nullable.
 
+## Interactive psql shell for administrators
+
+The separate stack `pramana-dev-admin-psql-access` is deployed. It created dedicated security group `sg-0d9f74e92a59b0313` with no inbound rules and only outbound TCP 5432 to the existing database security group. The DB security group allows TCP 5432 from this dedicated source group; RDS remains private. No EC2, NAT gateway, or interface endpoint was added. CloudShell's VPC connection has no additional charge; its VPC environment is ephemeral and its home directory is deleted after timeout or deletion ([CloudShell VPC setup](https://docs.aws.amazon.com/cloudshell/latest/userguide/creating-vpc-environment.html), [CloudShell limits](https://docs.aws.amazon.com/cloudshell/latest/userguide/limits.html)).
+
+In the AWS Console, select `us-east-1`, open CloudShell, choose **+ → Create VPC environment**, then select:
+
+- Name: `pramana-admin-psql`
+- VPC: `vpc-0f16fa3dea85f7b0d`
+- Subnet: `subnet-03c8032601117f445` (`us-east-1b`, same AZ as RDS)
+- Security group: `sg-0d9f74e92a59b0313`
+
+In its terminal, check for the preinstalled PostgreSQL client and connect:
+
+```bash
+psql --version
+psql -W "host=pramana-dev-database-db.citogy2m6wxr.us-east-1.rds.amazonaws.com port=5432 dbname=pramana_kyc user=pramana_app sslmode=require"
+```
+
+Enter the database password only at the prompt using the approved credential source. Do not put it in the command, a file, or chat. `sslmode=require` forces encrypted transport; for server-certificate verification, use the AWS RDS CA bundle with `sslmode=verify-full` ([RDS PostgreSQL TLS guide](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/PostgreSQL.Concepts.General.SSL.html)).
+
+At the `pramana_kyc=>` prompt, run only catalog reads in a read-only transaction:
+
+```sql
+BEGIN READ ONLY;
+\conninfo
+\dt public.*
+SELECT version_num FROM public.alembic_version;
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND table_name = 'customers'
+  AND column_name = 'date_of_birth';
+ROLLBACK;
+\q
+```
+
+The CloudFormation security-group path is deployed, but a human-launched CloudShell VPC session and `psql` login have not yet been tested. The existing fixed-query Lambda report remains the safer way to check schema metadata without opening an interactive SQL session.
+
 ## Deploy once or update the inspector
 
 The inspector is a separate CloudFormation stack. This keeps inspection access independent from the shared foundation, backend API, and OCR worker. From the repository root:

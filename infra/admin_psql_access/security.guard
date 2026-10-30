@@ -1,0 +1,13 @@
+rule ADMIN_PSQL_SG_EGRESS_IS_DB_ONLY {
+  Resources.PsqlShellSecurityGroup.Properties.SecurityGroupEgress[0].IpProtocol == 'tcp'
+  Resources.PsqlShellSecurityGroup.Properties.SecurityGroupEgress[0].FromPort == 5432
+  Resources.PsqlShellSecurityGroup.Properties.SecurityGroupEgress[0].ToPort == 5432
+  Resources.PsqlShellSecurityGroup.Properties.SecurityGroupEgress[0].DestinationSecurityGroupId.Ref == 'DatabaseSecurityGroupId'
+}
+
+rule DATABASE_INGRESS_IS_SCOPED_TO_SHELL_SG {
+  Resources.DatabaseIngressFromPsqlShell.Properties.IpProtocol == 'tcp'
+  Resources.DatabaseIngressFromPsqlShell.Properties.FromPort == 5432
+  Resources.DatabaseIngressFromPsqlShell.Properties.ToPort == 5432
+  Resources.DatabaseIngressFromPsqlShell.Properties.SourceSecurityGroupId.Ref == 'PsqlShellSecurityGroup'
+}

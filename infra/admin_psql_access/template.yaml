@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Dedicated CloudShell path to private PostgreSQL — permits only administrator-shell
+  traffic to the database security group on TCP 5432.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: CloudShell VPC environment -> dedicated SG -> existing DB SG on TCP 5432
+    must:
+      - Keep the CloudShell SG without ingress and with egress only to the DB SG on TCP 5432.
+      - Never add public or CIDR-based ingress to the database SG.
+      - Attach this SG only to an approved administrator CloudShell VPC environment.
+    ref:
+      - at: implementation/SCHEMA_INSPECTOR.md
+        has: Interactive psql runbook and read-only catalog queries
+        scope: project
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: pramana
+    AllowedPattern: '^[a-z][a-z0-9-]{1,24}$'
+  Environment:
+    Type: String
+    Default: dev
+    AllowedPattern: '^[a-z][a-z0-9-]{1,15}$'
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing shared VPC containing the private RDS instance.
+  DatabaseSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Existing database SG attached to the private PostgreSQL instance.
+
+Resources:
+  PsqlShellSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Dedicated source identity for approved CloudShell admins; separate from application, worker, and fixed-report groups.
+        must:
+          - No inbound rules.
+          - Egress only TCP 5432 to the existing database security group.
+          - Attach only to approved administrator CloudShell VPC environments.
+        mutable: change-with-constraints
+    Properties:
+      GroupDescription: !Sub '${ProjectName} admin psql access from CloudShell'
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          DestinationSecurityGroupId: !Ref DatabaseSecurityGroupId
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-admin-psql-shell-sg'
+
+  DatabaseIngressFromPsqlShell:
+    Type: AWS::EC2::SecurityGroupIngress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Adds only the approved CloudShell source SG to the shared DB SG; RDS remains private.
+        must:
+          - TCP 5432 only from PsqlShellSecurityGroup.
+          - Never use a public or CIDR source.
+        mutable: change-with-constraints
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref PsqlShellSecurityGroup
+
+Outputs:
+  PsqlShellSecurityGroupId:
+    Description: Attach only to the approved CloudShell VPC environment for psql access.
+    Value: !Ref PsqlShellSecurityGroup

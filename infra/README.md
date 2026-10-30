@@ -1,14 +1,15 @@
 # Person A shared SAM infrastructure
 
-The project infrastructure includes the shared foundation and OCR worker in `infra/sam/template.yaml`, plus the separately deployed read-only schema inspector in `infra/schema_inspector/template.yaml`:
+The project infrastructure includes the shared foundation and OCR worker in `infra/sam/template.yaml`, the read-only schema inspector in `infra/schema_inspector/template.yaml`, and the administrator CloudShell access path in `infra/admin_psql_access/template.yaml`:
 
-- A private VPC with two private subnets, no NAT/EIP/public-subnet resources in the template, private Lambda security groups, and a database security group that accepts PostgreSQL only from the backend, OCR worker, and fixed-query schema inspector groups.
+- A private VPC with two private subnets, no NAT/EIP/public-subnet resources in the template, private Lambda security groups, and a database security group that accepts PostgreSQL only from the backend, OCR worker, fixed-query schema inspector, and dedicated administrator CloudShell groups.
 - A free S3 gateway endpoint and an egress-only IPv6 Internet Gateway for private subnet outbound HTTPS. NAT and paid interface endpoints are not deployed. A temporary Lambda in the private subnets passed read-only connectivity checks to Secrets Manager, SQS, SNS, Cognito, and SES on 2026-10-29.
 - A private, versioned, SSE-S3 document bucket with access logging, TLS-only bucket policy, and CORS for the CloudFront origin.
 - A private frontend bucket served through CloudFront OAC. The distribution is enabled and deployed at `https://d231rykprgnarh.cloudfront.net`.
 - An encrypted standard OCR queue and DLQ. `POST /kyc/submit` is the only producer; do not add an S3 event trigger.
 - The conditional Python 3.12 x86_64 worker, OCR layer, shared notifications/RDS CA layer, partial batch retries, and scoped execution role. `EnableOCRWorker` defaults to `false` until Person B supplies the database secret and SES sender identity.
 - An on-demand Python 3.12 schema inspector. It is invoked through the IAM-authenticated Lambda API, uses a dedicated security group, runs fixed read-only catalog queries, and returns no customer rows or credentials. It creates no EC2 instance, public API, or persistent database login.
+- A separate admin psql access stack. Its dedicated CloudShell security group has no ingress and only TCP 5432 egress to the DB security group; the DB permits TCP 5432 from that group only. CloudShell VPC sessions are launched manually by an authorized administrator and are not part of the app.
 - CloudWatch alarms for DLQ depth, worker errors, optional RDS CPU and API 5xx metrics, plus an operations dashboard.
 
 Person B owns Cognito pools, RDS and its secret, the FastAPI/API Gateway component, and notification provider configuration. `backend/template.yaml` consumes outputs from the shared stack. The A-owned foundation is deployed; it does not create B-owned RDS, Cognito, backend/API, or customer notification resources. Person B and Person C's existing AWS access has not been changed.
@@ -23,16 +24,19 @@ When enabling the OCR worker, pass Person B's live private RDS endpoint as `RDSH
 - Private subnet A: `subnet-0e45971a48d73a18a` (`us-east-1a`)
 - Private subnet B: `subnet-03c8032601117f445` (`us-east-1b`)
 - Database security group: `sg-02235e74a0e910c37`
+- Administrator CloudShell psql security group: `sg-0d9f74e92a59b0313`
 - Backend Lambda security group: `sg-02823dd2442632bed`
 - OCR worker security group: `sg-0751ba5b887acb41c`
 
-The database security group allows TCP 5432 only from the backend, worker, and dedicated schema-inspector security groups. NAT and public routes have been removed. The VPC has `2600:1f18:4020:8800::/56`; its two private subnets use `2600:1f18:4020:8800::/64` and `2600:1f18:4020:8801::/64`. Both private route tables send IPv6 default traffic through egress-only gateway `eigw-0e03c52bb1008d130`. Lambda security groups limit IPv6 egress to TCP 443; their pre-existing IPv4 default egress has no public IPv4 route in these private subnets. The connectivity probes were superseded by the synthetic deployed workflow recorded below.
+The database security group allows TCP 5432 only from the backend, worker, schema-inspector, and dedicated admin psql security groups; it has no CIDR-based ingress. The admin group has no inbound rules and only TCP 5432 egress to the DB group. RDS remains private. NAT and public routes have been removed. The VPC has `2600:1f18:4020:8800::/56`; its two private subnets use `2600:1f18:4020:8800::/64` and `2600:1f18:4020:8801::/64`. Both private route tables send IPv6 default traffic through egress-only gateway `eigw-0e03c52bb1008d130`. Lambda security groups limit IPv6 egress to TCP 443; their pre-existing IPv4 default egress has no public IPv4 route in these private subnets. The connectivity probes were superseded by the synthetic deployed workflow recorded below.
 
 ### Persistent read-only schema report
 
 Use the IAM-invoked `pramana-dev-schema-inspector` Lambda to check the live migration revision, application table names, and `customers.date_of_birth` type. It runs inside the existing private subnets, reads the configured database secret only in memory, verifies the RDS TLS certificate, and executes fixed catalog `SELECT` queries in a read-only transaction. It has no Function URL or API Gateway route, and it does not return or log database credentials or customer rows. There is no EC2, VPN, NAT, or temporary runner to clean up. Lambda has no idle compute charge; normal per-invocation and small CloudWatch log usage applies.
 
 Build its Python 3.12 package and invoke it as described in [the admin schema-inspection guide](../implementation/SCHEMA_INSPECTOR.md).
+
+The same guide documents the separately deployed CloudShell psql access path. The stack `pramana-dev-admin-psql-access` creates no compute resource; a `psql` session is started only when an authorized admin launches a CloudShell VPC environment.
 
 ### Live release status (2026-10-30)
 
