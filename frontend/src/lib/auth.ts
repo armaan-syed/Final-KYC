@@ -1,12 +1,10 @@
 import { Amplify } from 'aws-amplify';
 import {
   signIn as amplifySignIn,
-  signUp as amplifySignUp,
-  confirmSignUp as amplifyConfirmSignUp,
   signOut as amplifySignOut,
   fetchAuthSession,
 } from 'aws-amplify/auth';
-import { RegisterRequest, LoginRequest, LoginResponse } from '@/types';
+import { LoginRequest, LoginResponse } from '@/types';
 
 // Detect whether to use client-side mock adapter
 export const isMockEnabled = (): boolean => {
@@ -54,6 +52,8 @@ export async function getAccessToken(): Promise<string> {
   }
 
   try {
+    const role = await getCurrentUserRole();
+    configureAmplify(role || 'customer');
     const session = await fetchAuthSession();
     return session.tokens?.accessToken?.toString() ?? '';
   } catch {
@@ -67,56 +67,6 @@ export async function getCurrentUserRole(): Promise<'customer' | 'reviewer' | nu
     if (storedRole) return storedRole;
   }
   return null;
-}
-
-export async function registerCustomer(data: RegisterRequest) {
-  if (isMockEnabled()) {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('pramana_pending_reg_email', data.email);
-    }
-    return {
-      message: 'Registration successful. Please verify your email with the verification code.',
-      customer_id: 'mock-cust-uuid-' + Date.now(),
-    };
-  }
-
-  // Real Amplify sign-up against Customer User Pool (us-east-1_8Q9onMEne)
-  configureAmplify('customer');
-  const signUpResult = await amplifySignUp({
-    username: data.email,
-    password: data.password,
-    options: {
-      userAttributes: {
-        email: data.email,
-        phone_number: data.phone_number,
-        given_name: data.full_name,
-        gender: data.gender,
-        'custom:date_of_birth': data.date_of_birth,
-        'custom:address_line1': data.address_line1,
-        'custom:address_line2': data.address_line2 || '',
-        'custom:city': data.city,
-        'custom:state': data.state,
-        'custom:pincode': data.pincode,
-      },
-    },
-  });
-
-  return {
-    message: 'Registration initiated. Verification code sent.',
-    customer_id: signUpResult.userId || '',
-  };
-}
-
-export async function confirmCustomerEmail(email: string, code: string) {
-  if (isMockEnabled()) {
-    return { message: 'Email confirmed successfully.' };
-  }
-
-  configureAmplify('customer');
-  return await amplifyConfirmSignUp({
-    username: email,
-    confirmationCode: code,
-  });
 }
 
 export async function loginUser(req: LoginRequest, role: 'customer' | 'reviewer' = 'customer'): Promise<LoginResponse> {

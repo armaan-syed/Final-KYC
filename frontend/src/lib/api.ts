@@ -4,8 +4,6 @@ import {
   RegisterRequest,
   RegisterResponse,
   ConfirmRequest,
-  LoginRequest,
-  LoginResponse,
   CustomerProfile,
   CustomerProfileUpdate,
   KYCStatusResponse,
@@ -19,6 +17,7 @@ import {
   DecisionRequest,
   DecisionResponse,
   AuditEvent,
+  AuditResponse,
 } from '@/types';
 import {
   mockCustomerProfile,
@@ -28,7 +27,8 @@ import {
   mockCaseDetailMap,
 } from '@/mocks/mockData';
 
-const baseURL = import.meta.env.VITE_API_BASE_URL || 'https://api.example.com';
+const configuredBaseURL = import.meta.env.VITE_API_BASE_URL?.trim();
+const baseURL = configuredBaseURL || (import.meta.env.DEV ? 'http://localhost:8000' : '');
 
 const apiClient = axios.create({
   baseURL,
@@ -40,10 +40,12 @@ const apiClient = axios.create({
 // Interceptor to attach Bearer token on protected calls
 apiClient.interceptors.request.use(async (config) => {
   const isPublicAuth =
-    config.url?.includes('/auth/login') ||
     config.url?.includes('/auth/register') ||
-    config.url?.includes('/auth/confirm') ||
-    config.url?.includes('/auth/refresh');
+    config.url?.includes('/auth/confirm');
+
+  if (!baseURL && !isMockEnabled()) {
+    throw new Error('API URL is not configured. Set VITE_API_BASE_URL before building the frontend.');
+  }
 
   if (!isPublicAuth) {
     const token = await getAccessToken();
@@ -88,26 +90,6 @@ export const apiConfirm = async (data: ConfirmRequest): Promise<{ message: strin
     return { message: 'Account confirmed successfully. Please log in.' };
   }
   const res = await apiClient.post<{ message: string }>('/auth/confirm', data);
-  return res.data;
-};
-
-export const apiLogin = async (data: LoginRequest): Promise<LoginResponse> => {
-  if (isMockEnabled()) {
-    return {
-      access_token: 'mock-access-token',
-      id_token: 'mock-id-token',
-      refresh_token: 'mock-refresh-token',
-      token_type: 'Bearer',
-      expires_in: 3600,
-      user: {
-        sub: 'sub-cust-001',
-        email: data.email,
-        name: 'ARMAAN SYED',
-        role: 'customer',
-      },
-    };
-  }
-  const res = await apiClient.post<LoginResponse>('/auth/login', data);
   return res.data;
 };
 
@@ -263,12 +245,13 @@ export const apiSubmitDecision = async (caseId: string, data: DecisionRequest): 
   return res.data;
 };
 
-export const apiGetCaseAudit = async (caseId: string): Promise<AuditEvent[]> => {
+export const apiGetCaseAudit = async (caseId: string): Promise<AuditResponse> => {
   if (isMockEnabled()) {
     const detail = mockCaseDetailMap[caseId] || mockCaseDetailMap['case-9821-432a-bc12'];
-    return detail.audit_trail || [];
+    const events = detail.audit_trail || [];
+    return { kyc_case_id: caseId, events, total: events.length };
   }
-  const res = await apiClient.get<AuditEvent[]>(`/reviewer/cases/${caseId}/audit`);
+  const res = await apiClient.get<AuditResponse>(`/reviewer/cases/${caseId}/audit`);
   return res.data;
 };
 

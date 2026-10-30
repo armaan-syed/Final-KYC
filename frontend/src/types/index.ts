@@ -133,6 +133,12 @@ export interface AuditEvent {
   created_at: string;
 }
 
+export interface AuditResponse {
+  kyc_case_id: string;
+  events: AuditEvent[];
+  total: number;
+}
+
 export interface CaseDetail {
   kyc_case_id: string;
   status: CaseKYCStatus;

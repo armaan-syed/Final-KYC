@@ -148,7 +148,7 @@ export default function DocumentUploadPage() {
                 <div>
                   <span className="font-bold text-sm text-slate-900 block">Aadhaar Card</span>
                   <span className="text-xs text-slate-500 mt-1 block leading-relaxed">
-                    Evaluates Full Name, Date of Birth, Gender, and Residential Address.
+                    Compares Full Name, Date of Birth, and Gender.
                   </span>
                 </div>
               </div>
@@ -172,7 +172,7 @@ export default function DocumentUploadPage() {
                 <div>
                   <span className="font-bold text-sm text-slate-900 block">PAN Card</span>
                   <span className="text-xs text-slate-500 mt-1 block leading-relaxed">
-                    Evaluates Full Name and Date of Birth against Income Tax records.
+                    Compares Full Name and Date of Birth.
                   </span>
                 </div>
               </div>
@@ -183,7 +183,7 @@ export default function DocumentUploadPage() {
         {/* Step 2: Dropzone */}
         <div>
           <label className="block text-xs font-bold text-sbi-blue uppercase tracking-wider mb-4">
-            2. Choose Document File (JPEG, PNG, PDF up to 10MB)
+            2. Choose Document File (JPEG, PNG, or PDF up to 10 MiB; PDFs up to 3 pages)
           </label>
           <div className="border-2 border-dashed border-slate-300 rounded-3xl p-10 text-center hover:border-sbi-accent transition-all relative bg-slate-50/60 hover:bg-blue-50/20 group">
             <input

@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { ShieldCheck, ArrowRight, Lock, Building2, UserPlus, Info } from 'lucide-react';
-import { registerCustomer } from '@/lib/auth';
+import { apiRegister, getApiErrorMessage } from '@/lib/api';
 import { ErrorAlert } from '@/components/ui/Alerts';
 
 const registerSchema = z
@@ -51,10 +51,10 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       const { confirmPassword, ...payload } = data;
-      await registerCustomer(payload);
+      await apiRegister(payload);
       navigate(`/confirm?email=${encodeURIComponent(payload.email)}`);
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Registration failed. Please check inputs.');
+      setErrorMessage(getApiErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -99,7 +99,7 @@ export default function RegisterPage() {
           <div className="bg-blue-50/70 border border-blue-200/80 rounded-2xl p-4 mb-8 flex items-start gap-3 text-xs text-blue-900">
             <Info className="w-4 h-4 text-sbi-accent flex-shrink-0 mt-0.5" />
             <p>
-              <strong>Verification Requirement:</strong> Our automated OCR verification engine compares the exact Name, DOB, and Address against the document scan you upload. Ensure spellings match your physical ID.
+              <strong>Verification Requirement:</strong> Our OCR engine compares your name and date of birth on Aadhaar and PAN, plus gender on Aadhaar. Ensure these details match your documents.
             </p>
           </div>
 

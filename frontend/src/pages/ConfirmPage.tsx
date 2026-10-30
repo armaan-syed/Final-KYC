@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { MailCheck, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
-import { confirmCustomerEmail } from '@/lib/auth';
+import { apiConfirm, getApiErrorMessage } from '@/lib/api';
 import { ErrorAlert, SuccessAlert } from '@/components/ui/Alerts';
 
 const confirmSchema = z.object({
@@ -39,13 +39,13 @@ export default function ConfirmPage() {
     setErrorMessage(null);
     setLoading(true);
     try {
-      await confirmCustomerEmail(data.email, data.code);
+      await apiConfirm({ email: data.email, confirmation_code: data.code });
       setSuccessMessage('Account verified successfully! Redirecting to login...');
       setTimeout(() => {
         navigate('/login');
       }, 1500);
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Verification failed. Please check the 6-digit OTP.');
+      setErrorMessage(getApiErrorMessage(err));
     } finally {
       setLoading(false);
     }
