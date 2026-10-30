@@ -1,0 +1,19 @@
+rule SCHEMA_INSPECTOR_PRIVATE {
+  Resources.SchemaInspectorFunction.Properties.VpcConfig exists
+  Resources.SchemaInspectorFunction.Properties.VpcConfig.Ipv6AllowedForDualStack == true
+  Resources.SchemaInspectorFunction.Properties.Runtime == 'python3.12'
+}
+
+rule DATABASE_ACCESS_IS_SECURITY_GROUP_SCOPED {
+  Resources.SchemaInspectorDatabaseEgress.Properties.DestinationSecurityGroupId.Ref == 'DatabaseSecurityGroupId'
+  Resources.SchemaInspectorDatabaseEgress.Properties.FromPort == 5432
+  Resources.SchemaInspectorDatabaseEgress.Properties.ToPort == 5432
+  Resources.DatabaseIngressFromSchemaInspector.Properties.SourceSecurityGroupId.Ref == 'SchemaInspectorSecurityGroup'
+  Resources.DatabaseIngressFromSchemaInspector.Properties.FromPort == 5432
+  Resources.DatabaseIngressFromSchemaInspector.Properties.ToPort == 5432
+}
+
+rule INVOKER_CAN_ONLY_CALL_FIXED_REPORT {
+  Resources.SchemaInspectorInvokerPolicy.Properties.PolicyDocument.Statement[0].Action == 'lambda:InvokeFunction'
+  Resources.SchemaInspectorInvokerPolicy.Properties.PolicyDocument.Statement[0].Resource.* exists
+}

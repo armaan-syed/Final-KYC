@@ -1,0 +1,238 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM-invoked, fixed-query, read-only PostgreSQL schema report for Pramana administrators.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: pramana
+    AllowedPattern: '^[a-z][a-z0-9-]{1,24}$'
+  Environment:
+    Type: String
+    Default: dev
+    AllowedPattern: '^[a-z][a-z0-9-]{1,15}$'
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing Person A shared VPC.
+  PrivateSubnetAId:
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnetBId:
+    Type: AWS::EC2::Subnet::Id
+  DatabaseSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Existing database security group attached to Person B's RDS instance.
+  DatabaseSecretArn:
+    Type: String
+    Description: ARN of the existing RDS-managed database secret; the secret value is never a stack parameter.
+    AllowedPattern: '^arn:[^:]+:secretsmanager:[^:]+:[0-9]{12}:secret:.+$'
+  DatabaseHost:
+    Type: String
+    Description: Private RDS DNS name.
+    AllowedPattern: '^[A-Za-z0-9.-]+$'
+    MaxLength: 253
+  DatabaseName:
+    Type: String
+    Default: pramana_kyc
+    AllowedPattern: '^[A-Za-z0-9_-]{1,63}$'
+  SharedNotificationsLayerArn:
+    Type: String
+    Description: Existing layer containing the RDS TLS CA bundle; this stack does not publish a new layer.
+    AllowedPattern: '^arn:[^:]+:lambda:[^:]+:[0-9]{12}:layer:.+:[0-9]+$'
+  ArtifactBucket:
+    Type: String
+    Description: Existing SAM artifact bucket holding the packaged inspector ZIP.
+    AllowedPattern: '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'
+  ArtifactKey:
+    Type: String
+    Description: S3 object key of the packaged inspector ZIP.
+    MinLength: 1
+
+Resources:
+  SchemaInspectorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Isolates the on-demand schema report from application and OCR network permissions.
+        must:
+          - No inbound rules.
+          - Permit only TLS 443 over the existing outbound-only IPv6 route and PostgreSQL to the existing database security group.
+          - Attach only to the fixed-query schema inspector Lambda.
+        mutable: change-with-constraints
+    Properties:
+      GroupDescription: Pramana fixed-query schema inspector
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIpv6: ::/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-schema-inspector-sg'
+
+  SchemaInspectorDatabaseEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref SchemaInspectorSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !Ref DatabaseSecurityGroupId
+
+  DatabaseIngressFromSchemaInspector:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref SchemaInspectorSecurityGroup
+
+  SchemaInspectorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Stores sanitized invocation diagnostics with a bounded retention period.
+        must:
+          - Never log credentials, query results, or customer data.
+        mutable: change-with-constraints
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${ProjectName}-${Environment}-schema-inspector'
+      RetentionInDays: 14
+
+  SchemaInspectorExecutionRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Runtime role for a fixed read-only catalog report; reads only the existing RDS secret and writes only its own logs.
+        must:
+          - Do not grant S3, SQS, Cognito, SES, SNS, or database write permissions.
+          - Keep secret access scoped to DatabaseSecretArn.
+          - Keep the handler unable to call Lambda VPC ENI management APIs.
+        mutable: change-with-constraints
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-schema-inspector-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SchemaInspectorRuntimeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ManageLambdaVpcNetworkInterfaces
+                Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                Resource: '*'
+              - Sid: DenyHandlerCodeEc2Access
+                Effect: Deny
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DeleteNetworkInterface
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                Resource: '*'
+                Condition:
+                  ArnEquals:
+                    lambda:SourceFunctionArn: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-schema-inspector'
+              - Sid: ReadExistingDatabaseSecret
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseSecretArn
+              - Sid: WriteSanitizedReportLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${ProjectName}-${Environment}-schema-inspector:*'
+
+  SchemaInspectorFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - SchemaInspectorLogGroup
+      - DatabaseIngressFromSchemaInspector
+      - SchemaInspectorDatabaseEgress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: IAM-invoked report returns only public schema table names, Alembic revision, and customers.date_of_birth type; it never returns customer rows or credentials.
+        must:
+          - Accept no SQL, table-name, or database-credential inputs from the caller.
+          - Run fixed PostgreSQL catalog SELECTs inside a read-only transaction.
+          - Do not create a Function URL, API Gateway route, or public invoke permission.
+        mutable: review-required
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-schema-inspector'
+      Description: Returns a fixed read-only summary of Pramana's PostgreSQL schema.
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ArtifactKey
+      Handler: handler.lambda_handler
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Role: !GetAtt SchemaInspectorExecutionRole.Arn
+      Timeout: 20
+      MemorySize: 256
+      Layers:
+        - !Ref SharedNotificationsLayerArn
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SchemaInspectorSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnetAId
+          - !Ref PrivateSubnetBId
+        Ipv6AllowedForDualStack: true
+      Environment:
+        Variables:
+          DATABASE_SECRET_ARN: !Ref DatabaseSecretArn
+          DATABASE_HOST: !Ref DatabaseHost
+          DATABASE_NAME: !Ref DatabaseName
+          DATABASE_PORT: '5432'
+          RDS_CA_BUNDLE: /opt/certs/global-bundle.pem
+
+  SchemaInspectorInvokerPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Reusable least-privilege identity policy for administrators allowed to request the fixed schema report.
+        must:
+          - Allow only lambda:InvokeFunction on this schema-inspector function.
+          - Do not attach to project teammates unless they are approved administrators.
+        mutable: change-with-constraints
+    Properties:
+      ManagedPolicyName: !Sub '${ProjectName}-${Environment}-schema-inspector-invoker'
+      Description: Allows approved administrators to invoke only the Pramana schema report.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource: !GetAtt SchemaInspectorFunction.Arn
+
+Outputs:
+  SchemaInspectorFunctionName:
+    Description: IAM-invoked fixed read-only PostgreSQL schema report.
+    Value: !Ref SchemaInspectorFunction
+  SchemaInspectorFunctionArn:
+    Description: Lambda ARN to invoke with an IAM-authorized AWS CLI identity.
+    Value: !GetAtt SchemaInspectorFunction.Arn
+  SchemaInspectorSecurityGroupId:
+    Description: Dedicated security group attached only to the schema inspector Lambda.
+    Value: !Ref SchemaInspectorSecurityGroup
+  SchemaInspectorInvokerPolicyArn:
+    Description: Attach only to approved administrator IAM identities that should run the fixed schema report.
+    Value: !Ref SchemaInspectorInvokerPolicy

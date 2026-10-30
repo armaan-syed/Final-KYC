@@ -12,3 +12,5 @@ __pycache__/
 infra/ocr/.build*/
 infra/ocr/dist/
 infra/shared/dist/
+infra/schema_inspector/dist/
+schema-report.json

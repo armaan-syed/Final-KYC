@@ -36,7 +36,7 @@ npm run build
 
 The production static site is written to `frontend/dist/`. Build with `VITE_USE_MOCKS=false` and the deployment API/Cognito values. Review the generated bundle before publishing; all `VITE_*` values are public.
 
-The AWS deployment uses the private S3 frontend bucket behind CloudFront Origin Access Control. The CloudFormation distribution maps S3 403/404 responses to `/index.html` so React Router routes work on direct navigation and refresh. CloudFront creation currently requires AWS account verification; until then, the assets can be staged in private S3 but the site is not publicly reachable. After a distribution is available, use its HTTPS origin in both API CORS and the document bucket's upload CORS before browser testing.
+The AWS deployment is live at [https://d231rykprgnarh.cloudfront.net](https://d231rykprgnarh.cloudfront.net). CloudFront distribution `EMNA2N11641KK` serves the private S3 frontend bucket through Origin Access Control and maps S3 403/404 responses to `/index.html` so React Router routes work on direct navigation and refresh. The document bucket allows this HTTPS origin for uploads. The backend API now allows this CloudFront origin and `http://localhost:3000`; live preflight checks for customer profile and KYC status pass.
 
 ## Integration contracts
 
