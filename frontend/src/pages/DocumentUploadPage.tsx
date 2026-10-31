@@ -41,7 +41,6 @@ export default function DocumentUploadPage() {
             kycStatus.upload_allowed ??
               (kycStatus.status === 'PENDING' ||
                 kycStatus.status === 'REUPLOAD_PENDING' ||
-                kycStatus.status === 'REUPLOAD_REQUESTED' ||
                 kycStatus.status === 'APPROVED' ||
                 kycStatus.status === 'REJECTED' ||
                 kycStatus.status === 'AUTO_VERIFIED')

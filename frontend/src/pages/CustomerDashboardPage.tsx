@@ -62,9 +62,8 @@ export default function CustomerDashboardPage() {
   const status: KYCStatus = kycStatus?.status || 'PENDING';
   const canUpload =
     kycStatus?.upload_allowed ??
-    ((status as string) === 'PENDING' ||
-      (status as string) === 'REUPLOAD_PENDING' ||
-      (status as string) === 'REUPLOAD_REQUESTED' ||
+    (status === 'PENDING' ||
+      status === 'REUPLOAD_PENDING' ||
       status === 'APPROVED' ||
       status === 'REJECTED' ||
       status === 'AUTO_VERIFIED');
@@ -211,7 +210,7 @@ export default function CustomerDashboardPage() {
               </div>
             )}
 
-            {(status === 'REUPLOAD_PENDING' || (status as string) === 'REUPLOAD_REQUESTED') && (
+            {status === 'REUPLOAD_PENDING' && (
               <div className="p-5 rounded-2xl bg-orange-50/80 border border-orange-200 text-orange-950 flex items-start gap-4">
                 <div className="w-8 h-8 rounded-full bg-orange-600 text-white flex items-center justify-center flex-shrink-0 mt-0.5">
                   <RotateCcw className="w-4 h-4" />
