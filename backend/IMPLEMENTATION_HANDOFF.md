@@ -1,14 +1,14 @@
 # Person B backend and deployment checkpoint
 
-**Updated:** 2026-10-30 after deployed API/OCR integration verification.
+**Updated:** 2026-10-31 after Person B's upload-lock release.
 
 ## Current live checkpoint
 
 - The RDS migration/catalog is verified at `001_initial_schema` with nine application tables, 67 expected columns, and `customers.date_of_birth` as PostgreSQL `DATE NOT NULL`.
-- The reviewed B API stack is deployed at `https://rimait7lg7.execute-api.us-east-1.amazonaws.com/dev`; health is 200. The A OCR worker is Active with its SQS event mapping Enabled.
-- A synthetic live API flow passed customer/reviewer Cognito access-token authentication, presigned S3 upload, submit/SQS, worker OCR to `REVIEW_REQUIRED`, reviewer queue/detail, re-upload decision, customer status, and audit persistence. Synthetic users, rows, object version, and temporary runner artifacts were removed. The `.invalid` SES notification was rejected and its provider outcome was recorded; no real email or SMS was delivered.
-- Backend tests: **36 passed**. OCR tests: **36 passed, 1 skipped** (optional PostgreSQL test). Frontend tests: **5 passed**; production build succeeded; `npm audit --omit=dev`: **0 vulnerabilities**.
-- Remaining release work is AWS account verification/CloudFront, final API and S3 CORS for the CloudFront origin, browser registration and UI checks, SES production access, and SNS SMS service/use/spend configuration. The current frontend is stored privately in S3 and is not public.
+- The reviewed B API stack is deployed at `https://rimait7lg7.execute-api.us-east-1.amazonaws.com/dev`. On 2026-10-31, backend commit `2e38d84` was deployed through reviewed change set `pramana-backend-20261031-2e38d84-upload-lock`; the stack is `UPDATE_COMPLETE`, and the Python 3.11 Lambda is `Active` with a successful last update. The change set updated the Lambda code and its API Gateway integration body in place, without replacements or new resources. The A OCR worker remains Active with its SQS event mapping Enabled.
+- The prior synthetic live API flow verified Cognito access-token authentication, presigned S3 upload, submit/SQS, worker OCR, reviewer decision, customer status, and audit persistence. The 2026-10-31 service-level test additionally verified incomplete-upload attempt reuse, locking after document submission, and a new attempt after reviewer re-upload request against disposable PostgreSQL with mocked S3 URL generation. No authenticated browser click-through of this latest upload-lock release has been performed. No real email or SMS delivery was verified.
+- Current checks: backend **36 passed**; OCR **45 passed, 1 skipped** (host lacks OCR runtime libraries; the panel test passed separately in the Python 3.12 Lambda-compatible image); frontend **19 passed** and production build succeeded with non-fatal dependency-comment and bundle-size warnings. The live OpenAPI includes `upload_allowed`; protected status access without a token returns 403; CloudFront-origin API preflight returns 200.
+- The frontend is served through CloudFront at `https://d231rykprgnarh.cloudfront.net` with a private S3 origin. The 2026-10-31 frontend upload and invalidation completed; live index, JS, and CSS return HTTP 200. Remaining notification release work is SES production access and SNS SMS service/use/spend configuration. No CloudTrail trails are configured, so deployment auditing relied on CloudFormation events and direct service readback.
 
 ## Implemented in source
 
@@ -18,6 +18,7 @@
 - B's Cognito outputs and current public configuration are recorded in [`COGNITO_OUTPUTS.md`](COGNITO_OUTPUTS.md). Both pools/clients exist, and reviewer self-registration is disabled.
 - Private RDS is deployed as `pramana-dev-database`: PostgreSQL 18.3, `db.t4g.micro`, 20 GiB encrypted storage, single-AZ, non-public, and one-day automated backup retention. Credentials are RDS-managed in Secrets Manager. The database stack has `DeletionPolicy: Retain`.
 - The backend template consumes the shared network and notifications layer; it does not create another VPC, shared API, or duplicate layer. Its Lambda is configured for IPv6 in dual-stack subnets. SNS direct-phone permission is region-scoped, `AdminGetUser` is scoped to the customer pool ARN, and the RDS secret/SQS/S3/SES permissions are scoped.
+- Commit `2e38d84` adds the customer `upload_allowed` status field, prevents new attempts while a submitted case is processing/awaiting review, reuses an incomplete upload attempt, and allows a new attempt after a reviewer decision. The companion frontend status-type correction was pushed as `f983485`.
 
 ## A-owned blockers reported by B: resolved
 
