@@ -7,7 +7,7 @@ from unittest.mock import patch
 from pramana_ocr.normalization import normalize_date, normalize_gender, normalize_name
 from pramana_ocr.parser import parse_aadhaar, parse_document, parse_pan
 from pramana_ocr.pipeline import extract_document_fields
-from pramana_ocr.imaging import render_pages
+from pramana_ocr.imaging import detect_panel_regions, render_pages
 from pramana_ocr.verification import compare_fields
 
 
@@ -43,6 +43,47 @@ ABCDE1234F"""
     def test_missing_fields_are_omitted(self):
         self.assertEqual(parse_aadhaar("Government of India"), {})
 
+    def test_aadhaar_dob_labels_and_formats(self):
+        for label, raw_date in (
+            ("DOB", "15/02/2007"),
+            ("Date of Birth", "15-02-2007"),
+            ("D.O.B", "15.02.2007"),
+            ("Birth Date", "2007-02-15"),
+        ):
+            with self.subTest(label=label, raw_date=raw_date):
+                self.assertEqual(
+                    parse_aadhaar(f"{label}: {raw_date}")["date_of_birth"], raw_date
+                )
+
+    def test_dob_label_can_precede_value_and_ocr_digit_confusions_are_normalized(self):
+        parsed = parse_aadhaar("D.O.B\n15/02/20O7")
+        self.assertEqual(parsed["date_of_birth"], "15/02/20O7")
+        self.assertEqual(normalize_date(parsed["date_of_birth"]), "2007-02-15")
+
+    def test_invalid_or_future_dob_is_not_extracted(self):
+        self.assertNotIn("date_of_birth", parse_aadhaar("DOB: 31/02/2007"))
+        self.assertNotIn("date_of_birth", parse_aadhaar("DOB: 15/02/2099"))
+
+    def test_gender_labels_words_and_single_letter_markers(self):
+        cases = (
+            ("Gender: Male", "Male", "MALE"),
+            ("Gender: Female", "Female", "FEMALE"),
+            ("Gender: M", "M", "MALE"),
+            ("Gender:\nF", "F", "FEMALE"),
+            ("Gender: Ma1e", "Ma1e", "MALE"),
+            ("DOB Male", "Male", "MALE"),
+            ("FEMALE", "FEMALE", "FEMALE"),
+        )
+        for text, raw_gender, normalized_gender in cases:
+            with self.subTest(text=text):
+                parsed = parse_aadhaar(text)
+                self.assertEqual(parsed["gender"], raw_gender)
+                self.assertEqual(normalize_gender(parsed["gender"]), normalized_gender)
+
+    def test_gender_is_not_inferred_from_name_or_prose(self):
+        self.assertNotIn("gender", parse_aadhaar("Government of India\nALEX SAMPLE"))
+        self.assertNotIn("gender", parse_aadhaar("The word male appears in instructions."))
+
     def test_unknown_document_type_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "AADHAAR or PAN"):
             parse_document("VOTER_ID", "some text")
@@ -52,13 +93,16 @@ class NormalizationTests(unittest.TestCase):
     def test_normalize_name_and_date(self):
         self.assertEqual(normalize_name("  Arjun-Demo,  "), "ARJUN DEMO")
         self.assertEqual(normalize_date("02/01/2000"), "2000-01-02")
+        self.assertEqual(normalize_date("02.01.2000"), "2000-01-02")
+        self.assertEqual(normalize_date("02/01/20O0"), "2000-01-02")
         self.assertEqual(normalize_date("2000-01-02"), "2000-01-02")
         self.assertIsNone(normalize_date("31/02/2000"))
 
     def test_normalize_gender_aliases(self):
-        self.assertEqual(normalize_gender("M"), "male")
-        self.assertEqual(normalize_gender(" FEMALE "), "female")
-        self.assertIsNone(normalize_gender("unknown"))
+        self.assertEqual(normalize_gender("M"), "MALE")
+        self.assertEqual(normalize_gender(" FEMALE "), "FEMALE")
+        self.assertEqual(normalize_gender("Transgender"), "OTHER")
+        self.assertEqual(normalize_gender("unknown"), "UNKNOWN")
 
 
 class VerificationTests(unittest.TestCase):
@@ -76,6 +120,24 @@ class VerificationTests(unittest.TestCase):
         result = compare_fields({"name": "ARJUN DEMO"}, {}, ["name", "gender"])
         self.assertEqual(result["overall_status"], "REVIEW_REQUIRED")
         self.assertEqual(result["match_percentage"], 0.0)
+        self.assertEqual(
+            [field["status"] for field in result["field_comparisons"]],
+            ["NOT_EXTRACTED", "NOT_EXTRACTED"],
+        )
+        self.assertIn("could not be extracted", result["review_reason"])
+
+    def test_mismatch_is_distinct_from_field_not_extracted(self):
+        result = compare_fields(
+            {"name": "ARJUN DEMO", "date_of_birth": "2000-01-02", "gender": "M"},
+            {"name": "ARJUN DEMO", "date_of_birth": "2001-01-02"},
+            ["name", "date_of_birth", "gender"],
+        )
+        self.assertEqual(
+            [field["status"] for field in result["field_comparisons"]],
+            ["MATCH", "MISMATCH", "NOT_EXTRACTED"],
+        )
+        self.assertEqual(result["overall_status"], "REVIEW_REQUIRED")
+        self.assertIn("gender", result["review_reason"])
 
     def test_empty_field_contract_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "at least one"):
@@ -150,6 +212,26 @@ class DocumentLimitTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no more than 3 pages"):
                 list(render_pages(b"synthetic pdf", "application/pdf"))
         self.assertTrue(pdf.closed)
+
+
+class PanelDetectionTests(unittest.TestCase):
+    def test_detects_generic_two_by_two_scan_panels(self):
+        try:
+            import cv2
+            import numpy as np
+            from pramana_ocr.imaging import _imports
+
+            _imports()
+        except (ImportError, RuntimeError):
+            self.skipTest("OpenCV/Tesseract runtime dependencies are not installed")
+
+        image = np.full((400, 400, 3), 255, dtype=np.uint8)
+        cv2.line(image, (10, 200), (390, 200), (0, 0, 0), 5)
+        cv2.line(image, (200, 10), (200, 390), (0, 0, 0), 5)
+        panels = detect_panel_regions(image)
+
+        self.assertEqual(len(panels), 4)
+        self.assertTrue(all(panel.shape[0] >= 190 and panel.shape[1] >= 190 for panel in panels))
 
 
 if __name__ == "__main__":

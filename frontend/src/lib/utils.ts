@@ -1,5 +1,16 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import type { FieldComparison } from '@/types';
+
+export type FieldComparisonStatus = NonNullable<FieldComparison['status']>;
+
+export function getFieldComparisonStatus(
+  comparison: FieldComparison,
+): FieldComparisonStatus {
+  if (comparison.status) return comparison.status;
+  if (!comparison.document_value?.trim()) return 'NOT_EXTRACTED';
+  return comparison.is_match ? 'MATCH' : 'MISMATCH';
+}
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

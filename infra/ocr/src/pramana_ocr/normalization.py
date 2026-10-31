@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 
 
 def normalize_name(value: str | None) -> str | None:
@@ -17,10 +17,20 @@ def normalize_name(value: str | None) -> str | None:
 def normalize_date(value: str | None) -> str | None:
     if value is None:
         return None
-    raw = value.strip()
-    for pattern in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
+    raw = value.strip().translate(
+        str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "|": "1"})
+    )
+    for pattern in ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d"):
         try:
-            return datetime.strptime(raw, pattern).strftime("%Y-%m-%d")
+            parsed = datetime.strptime(raw, pattern).date()
+            today = date.today()
+            try:
+                earliest = today.replace(year=today.year - 130)
+            except ValueError:
+                earliest = today.replace(year=today.year - 130, day=28)
+            if parsed > today or parsed < earliest:
+                return None
+            return parsed.isoformat()
         except ValueError:
             pass
     return None
@@ -31,12 +41,18 @@ def normalize_gender(value: str | None) -> str | None:
         return None
     canonical = " ".join(value.casefold().split())
     aliases = {
-        "m": "male",
-        "male": "male",
-        "f": "female",
-        "female": "female",
-        "transgender": "transgender",
-        "trans": "transgender",
+        "m": "MALE",
+        "male": "MALE",
+        "ma1e": "MALE",
+        "maie": "MALE",
+        "f": "FEMALE",
+        "female": "FEMALE",
+        "fema1e": "FEMALE",
+        "femaie": "FEMALE",
+        "transgender": "OTHER",
+        "trans": "OTHER",
+        "other": "OTHER",
+        "unknown": "UNKNOWN",
     }
     return aliases.get(canonical)
 

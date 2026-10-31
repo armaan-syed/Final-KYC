@@ -161,35 +161,46 @@ export default function KYCStatusHistoryPage() {
                 </h4>
                 <div className="divide-y divide-slate-100 border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
                   {latest.field_comparisons.map((c) => (
-                    <div
-                      key={c.field}
-                      className={`p-4 flex items-center justify-between text-xs transition-colors ${
-                        c.is_match ? 'bg-white' : 'bg-rose-50/50'
-                      }`}
-                    >
-                      <div className="font-bold text-slate-800">
-                        {formatFieldLabel(c.field)}
-                      </div>
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
-                          c.is_match
-                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                            : 'bg-rose-50 text-rose-800 border-rose-200'
-                        }`}
-                      >
-                        {c.is_match ? (
-                          <>
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            Match Verified
-                          </>
-                        ) : (
-                          <>
-                            <XCircle className="w-3.5 h-3.5 text-rose-600" />
-                            Discrepancy Detected
-                          </>
-                        )}
-                      </span>
-                    </div>
+                    (() => {
+                      const result = c.status ?? (c.is_match ? 'MATCH' : 'REVIEW_REQUIRED');
+                      const matched = result === 'MATCH';
+                      const needsReview = result === 'REVIEW_REQUIRED' || result === 'NOT_EXTRACTED';
+                      return (
+                        <div
+                          key={c.field}
+                          className={`p-4 flex items-center justify-between text-xs transition-colors ${
+                            matched ? 'bg-white' : needsReview ? 'bg-amber-50/50' : 'bg-rose-50/50'
+                          }`}
+                        >
+                          <div className="font-bold text-slate-800">
+                            {formatFieldLabel(c.field)}
+                          </div>
+                          <span
+                            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
+                              matched
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                : needsReview
+                                  ? 'bg-amber-50 text-amber-900 border-amber-200'
+                                  : 'bg-rose-50 text-rose-800 border-rose-200'
+                            }`}
+                          >
+                            {matched ? (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                Match
+                              </>
+                            ) : needsReview ? (
+                              <>Needs Review</>
+                            ) : (
+                              <>
+                                <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                                Mismatch
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })()
                   ))}
                 </div>
               </div>

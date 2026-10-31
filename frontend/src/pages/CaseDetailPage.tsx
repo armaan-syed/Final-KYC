@@ -17,7 +17,7 @@ import { apiGetCaseDetail, apiSubmitDecision, getApiErrorMessage } from '@/lib/a
 import { CaseDetail, DecisionType } from '@/types';
 import { KYCStatusBadge } from '@/components/ui/KYCStatusBadge';
 import { LoadingSpinner, ErrorAlert, SuccessAlert } from '@/components/ui/Alerts';
-import { formatDate, formatFieldLabel } from '@/lib/utils';
+import { formatDate, formatFieldLabel, getFieldComparisonStatus } from '@/lib/utils';
 
 export default function CaseDetailPage() {
   const [searchParams] = useSearchParams();
@@ -87,6 +87,23 @@ export default function CaseDetailPage() {
     detail.latest_attempt.status === 'REUPLOAD_REQUESTED'
       ? 'REUPLOAD_PENDING'
       : detail.latest_attempt.status
+  );
+  const comparisons = detail.latest_attempt.field_comparisons || [];
+  const comparisonRows = [...comparisons];
+  if (
+    detail.latest_attempt.document_type === 'PAN' &&
+    !comparisonRows.some((comparison) => comparison.field === 'gender')
+  ) {
+    comparisonRows.push({
+      field: 'gender',
+      customer_value: detail.customer.gender,
+      document_value: undefined,
+      is_match: false,
+      status: 'NOT_APPLICABLE',
+    });
+  }
+  const hasUnextractedFields = comparisonRows.some(
+    (comparison) => getFieldComparisonStatus(comparison) === 'NOT_EXTRACTED',
   );
 
   return (
@@ -248,13 +265,19 @@ export default function CaseDetailPage() {
           </div>
           <div>
             <h3 className="text-sm font-bold text-slate-900">
-              Side-by-Side OCR Field Comparison & Discrepancy Matrix
+              Side-by-Side OCR Field Comparison
             </h3>
             <p className="text-xs text-slate-500">
-              Comparing database customer registration with raw tokens extracted by AWS Tesseract / OpenCV
+              Each result distinguishes an actual mismatch from a field the OCR could not read.
             </p>
           </div>
         </div>
+
+        {hasUnextractedFields && (
+          <div className="mx-6 mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+            Required document fields could not be extracted. This attempt needs manual review; a missing OCR value is not treated as a mismatch.
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -267,31 +290,37 @@ export default function CaseDetailPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium">
-              {(detail.latest_attempt.field_comparisons || []).map((c) => (
-                <tr
-                  key={c.field}
-                  className={`transition-colors ${c.is_match ? 'bg-white' : 'bg-rose-50/70 font-bold'}`}
-                >
+              {comparisonRows.map((c) => {
+                const comparisonStatus = getFieldComparisonStatus(c);
+                const statusStyle = {
+                  MATCH: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+                  MISMATCH: 'bg-rose-100 text-rose-800 border-rose-200',
+                  NOT_EXTRACTED: 'bg-amber-100 text-amber-900 border-amber-200',
+                  NOT_APPLICABLE: 'bg-slate-100 text-slate-700 border-slate-200',
+                }[comparisonStatus];
+                const rowStyle = {
+                  MATCH: 'bg-white',
+                  MISMATCH: 'bg-rose-50/70 font-bold',
+                  NOT_EXTRACTED: 'bg-amber-50/50',
+                  NOT_APPLICABLE: 'bg-slate-50/50',
+                }[comparisonStatus];
+                return (
+                <tr key={c.field} className={`transition-colors ${rowStyle}`}>
                   <td className="py-4 px-6 text-slate-900 font-bold">
                     {formatFieldLabel(c.field)}
                   </td>
                   <td className="py-4 px-6 text-slate-700">{c.customer_value || '—'}</td>
                   <td className="py-4 px-6 text-slate-700">{c.document_value || '—'}</td>
                   <td className="py-4 px-6 text-center">
-                    {c.is_match ? (
-                      <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        Exact Match
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
-                        <XCircle className="w-3.5 h-3.5 text-rose-600" />
-                        Discrepancy
-                      </span>
-                    )}
+                    <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-bold border ${statusStyle}`}>
+                      {comparisonStatus === 'MATCH' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />}
+                      {comparisonStatus === 'MISMATCH' && <XCircle className="w-3.5 h-3.5 text-rose-600" />}
+                      {comparisonStatus.replace('_', ' ')}
+                    </span>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

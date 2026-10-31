@@ -146,6 +146,30 @@ class WorkerProcessingTests(unittest.TestCase):
         self.assertEqual(self.repository.persisted[0]["match_percentage"], 50.0)
         self.assertEqual(self.notifications, [])
 
+    def test_unextracted_field_is_persisted_as_missing_not_mismatch(self):
+        def missing_dob(*_args):
+            result = exact_pan()
+            result["date_of_birth"] = {"raw_value": None, "normalized_value": None}
+            return result
+
+        result = process_job(
+            self.job,
+            s3_client=self.s3,
+            repository=self.repository,
+            notifier=self.notify,
+            extractor=missing_dob,
+        )
+        self.assertEqual(result, "REVIEW_REQUIRED")
+        persisted = self.repository.persisted[0]
+        dob = next(
+            comparison for comparison in persisted["comparisons"]
+            if comparison["field_name"] == "date_of_birth"
+        )
+        self.assertEqual(dob["status"], "NOT_EXTRACTED")
+        self.assertIsNone(dob["document_value"])
+        self.assertFalse(dob["is_match"])
+        self.assertEqual(persisted["status"], "REVIEW_REQUIRED")
+
     def test_duplicate_or_completed_attempt_does_not_notify(self):
         self.repository.transitioned = False
         result = process_job(

@@ -56,6 +56,7 @@ export interface FieldComparison {
   customer_value?: string;
   document_value?: string;
   is_match: boolean;
+  status?: 'MATCH' | 'MISMATCH' | 'NOT_EXTRACTED' | 'NOT_APPLICABLE';
 }
 
 export interface KYCAttempt {

@@ -117,7 +117,7 @@ export default function ReviewQueuePage() {
                   <th className="py-4 px-6">Customer Name</th>
                   <th className="py-4 px-6">Doc Type</th>
                   <th className="py-4 px-6">Submission Date</th>
-                  <th className="py-4 px-6">Flagged Discrepancy</th>
+                  <th className="py-4 px-6">Fields Requiring Review</th>
                   <th className="py-4 px-6 text-right">Action</th>
                 </tr>
               </thead>
@@ -148,10 +148,10 @@ export default function ReviewQueuePage() {
                         {item.mismatched_fields.map((f) => (
                           <span
                             key={f}
-                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200"
+                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-200"
                           >
-                            <AlertTriangle className="w-3 h-3 text-rose-600" />
-                            {formatFieldLabel(f)}
+                            <AlertTriangle className="w-3 h-3 text-amber-700" />
+                            Review {formatFieldLabel(f)}
                           </span>
                         ))}
                       </div>

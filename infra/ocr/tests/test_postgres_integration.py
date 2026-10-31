@@ -173,6 +173,55 @@ class PostgreSQLWorkerIntegrationTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_missing_ocr_value_persists_as_null_for_not_extracted_state(self):
+        comparisons = [
+            {
+                "field_name": "name",
+                "customer_value": "ARJUN DEMO",
+                "document_value": "ARJUN DEMO",
+                "is_match": True,
+                "status": "MATCH",
+            },
+            {
+                "field_name": "date_of_birth",
+                "customer_value": "2000-01-02",
+                "document_value": None,
+                "is_match": False,
+                "status": "NOT_EXTRACTED",
+            },
+        ]
+        self.assertTrue(
+            self.repository.persist_result(
+                job=self.job,
+                extracted_fields={
+                    "name": {
+                        "raw_value": "Arjun Demo",
+                        "normalized_value": "ARJUN DEMO",
+                        "confidence": 92.0,
+                    }
+                },
+                comparisons=comparisons,
+                status="REVIEW_REQUIRED",
+                match_percentage=50.0,
+            )
+        )
+
+        connection = psycopg2.connect(DATABASE_URL)
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT document_value, is_match FROM field_comparisons WHERE attempt_id = %s AND field_name = 'date_of_birth'",
+                    (self.attempt_id,),
+                )
+                self.assertEqual(cursor.fetchone(), (None, False))
+                cursor.execute(
+                    "SELECT status FROM kyc_attempts WHERE id = %s",
+                    (self.attempt_id,),
+                )
+                self.assertEqual(cursor.fetchone(), ("REVIEW_REQUIRED",))
+        finally:
+            connection.close()
+
 
 if __name__ == "__main__":
     unittest.main()
