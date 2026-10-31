@@ -38,5 +38,6 @@ class CustomerProfileUpdateRequest(BaseModel):
 class CustomerKYCStatusResponse(BaseModel):
     kyc_case_id: UUID
     status: str
+    upload_allowed: bool
     latest_attempt: Optional[dict] = None
     rejection_reason: Optional[str] = None

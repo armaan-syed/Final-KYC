@@ -61,9 +61,13 @@ export default function CustomerDashboardPage() {
 
   const status: KYCStatus = kycStatus?.status || 'PENDING';
   const canUpload =
-    (status as string) === 'PENDING' ||
-    (status as string) === 'REUPLOAD_PENDING' ||
-    (status as string) === 'REUPLOAD_REQUESTED';
+    kycStatus?.upload_allowed ??
+    ((status as string) === 'PENDING' ||
+      (status as string) === 'REUPLOAD_PENDING' ||
+      (status as string) === 'REUPLOAD_REQUESTED' ||
+      status === 'APPROVED' ||
+      status === 'REJECTED' ||
+      status === 'AUTO_VERIFIED');
 
   return (
     <div className="space-y-8">
@@ -157,7 +161,18 @@ export default function CustomerDashboardPage() {
             </div>
 
             {/* Dynamic Status Action Blocks */}
-            {status === 'PROCESSING' && (
+            {status === 'PROCESSING' && kycStatus?.upload_allowed && (
+              <div className="p-5 rounded-2xl bg-blue-50/80 border border-blue-200 text-blue-950 flex items-start gap-4">
+                <Clock className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                <div>
+                  <h4 className="font-bold text-sm">Complete Your Document Upload</h4>
+                  <p className="text-xs text-blue-800 mt-1 leading-relaxed">
+                    Your upload has not been submitted for review yet. Continue the upload from this page; you may retry without creating another attempt.
+                  </p>
+                </div>
+              </div>
+            )}
+            {status === 'PROCESSING' && !kycStatus?.upload_allowed && (
               <div className="p-5 rounded-2xl bg-blue-50/80 border border-blue-200 text-blue-950 flex items-start gap-4">
                 <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center animate-spin flex-shrink-0 mt-0.5">
                   <Clock className="w-4 h-4" />
@@ -171,6 +186,17 @@ export default function CustomerDashboardPage() {
               </div>
             )}
 
+            {status === 'REVIEW_REQUIRED' && (
+              <div className="p-5 rounded-2xl bg-amber-50/80 border border-amber-200 text-amber-950 flex items-start gap-4">
+                <Clock className="w-5 h-5 mt-0.5 flex-shrink-0" />
+                <div>
+                  <h4 className="font-bold text-sm">Awaiting Reviewer Review</h4>
+                  <p className="text-xs text-amber-800 mt-1 leading-relaxed">
+                    Your document is with a reviewer. Please wait for the decision; another upload will be available only if the reviewer requests a re-upload.
+                  </p>
+                </div>
+              </div>
+            )}
             {(status === 'AUTO_VERIFIED' || status === 'APPROVED') && (
               <div className="p-5 rounded-2xl bg-emerald-50/80 border border-emerald-200 text-emerald-950 flex items-start gap-4">
                 <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -179,7 +205,7 @@ export default function CustomerDashboardPage() {
                 <div>
                   <h4 className="font-bold text-sm">Full Verification Complete</h4>
                   <p className="text-xs text-emerald-800 mt-1 leading-relaxed">
-                    Your government identity document has been verified successfully. Your bank account is fully compliant with all regulatory guidelines.
+                    Your government identity document has been verified successfully. You can upload another document if you need to start a new KYC review.
                   </p>
                 </div>
               </div>
@@ -214,7 +240,7 @@ export default function CustomerDashboardPage() {
                 <div>
                   <h4 className="font-bold text-sm">Verification Non-Compliant</h4>
                   <p className="text-xs text-rose-800 mt-1 leading-relaxed">
-                    Reason: {kycStatus?.rejection_reason || 'Discrepancy between registered information and identity card.'}
+                    Reason: {kycStatus?.rejection_reason || 'Discrepancy between registered information and identity card.'} You can upload another document to start a new review.
                   </p>
                 </div>
               </div>

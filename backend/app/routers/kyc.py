@@ -20,7 +20,7 @@ from app.schemas.kyc import (
     KYCAttemptResponse,
     FieldComparisonSummary,
 )
-from app.services.kyc_service import KYCService
+from app.services.kyc_service import KYCService, UploadNotAllowedError
 from app.services.s3 import generate_presigned_get_url
 
 router = APIRouter()
@@ -29,7 +29,7 @@ router = APIRouter()
 @router.post(
     "/upload-url",
     response_model=UploadURLResponse,
-    responses={400: {"model": dict}, 503: {"model": dict}},
+    responses={400: {"model": dict}, 409: {"model": dict}, 503: {"model": dict}},
 )
 def get_upload_url(
     request: UploadURLRequest,
@@ -39,13 +39,16 @@ def get_upload_url(
     """Generate a presigned S3 URL for document upload and allocate an attempt."""
     service = KYCService(db)
     case = service.get_or_create_case(customer)
-    return service.create_upload_url(
-        customer=customer,
-        case=case,
-        document_type=request.document_type,
-        file_name=request.file_name,
-        content_type=request.content_type,
-    )
+    try:
+        return service.create_upload_url(
+            customer=customer,
+            case=case,
+            document_type=request.document_type,
+            file_name=request.file_name,
+            content_type=request.content_type,
+        )
+    except UploadNotAllowedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post(

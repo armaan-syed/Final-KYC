@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   UploadCloud,
@@ -10,9 +10,9 @@ import {
   FileCheck,
   ScanLine,
 } from 'lucide-react';
-import { apiGetUploadUrl, directUploadToS3, apiSubmitKYC, getApiErrorMessage } from '@/lib/api';
-import { DocumentType } from '@/types';
-import { ErrorAlert, SuccessAlert } from '@/components/ui/Alerts';
+import { apiGetKYCStatus, apiGetUploadUrl, directUploadToS3, apiSubmitKYC, getApiErrorMessage } from '@/lib/api';
+import { DocumentType, KYCStatus } from '@/types';
+import { ErrorAlert, LoadingSpinner, SuccessAlert } from '@/components/ui/Alerts';
 import { classifyDocument } from '@/lib/documentClassifier';
 
 export default function DocumentUploadPage() {
@@ -26,6 +26,38 @@ export default function DocumentUploadPage() {
     'idle' | 'scanning_document' | 'requesting_url' | 'uploading_s3' | 'submitting' | 'done'
   >('idle');
   const [error, setError] = useState<string | null>(null);
+  const [caseStatus, setCaseStatus] = useState<KYCStatus | null>(null);
+  const [uploadAllowed, setUploadAllowed] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [statusError, setStatusError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGetKYCStatus()
+      .then((kycStatus) => {
+        if (!cancelled) {
+          setCaseStatus(kycStatus.status);
+          setUploadAllowed(
+            kycStatus.upload_allowed ??
+              (kycStatus.status === 'PENDING' ||
+                kycStatus.status === 'REUPLOAD_PENDING' ||
+                kycStatus.status === 'REUPLOAD_REQUESTED' ||
+                kycStatus.status === 'APPROVED' ||
+                kycStatus.status === 'REJECTED' ||
+                kycStatus.status === 'AUTO_VERIFIED')
+          );
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setStatusError(getApiErrorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setStatusLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setError(null);
@@ -108,6 +140,56 @@ export default function DocumentUploadPage() {
     }
   };
 
+  const canUpload = uploadAllowed;
+  const awaitingReview =
+    caseStatus === 'REVIEW_REQUIRED' || (caseStatus === 'PROCESSING' && !uploadAllowed);
+
+  if (statusLoading) {
+    return <LoadingSpinner message="Checking your KYC review status..." />;
+  }
+
+  if (statusError) {
+    return (
+      <div className="max-w-3xl mx-auto space-y-6">
+        <ErrorAlert
+          message={`Unable to check your KYC review status. ${statusError}`}
+          onRetry={() => window.location.reload()}
+        />
+        <Link to="/dashboard" className="text-sm font-semibold text-sbi-accent hover:underline">
+          Return to dashboard
+        </Link>
+      </div>
+    );
+  }
+
+  if (!canUpload) {
+    const blockedMessage = awaitingReview
+      ? 'Your document has already been submitted and is awaiting review. Please wait for the reviewer to approve or reject the case, or request a re-upload. Another upload will be available only if a re-upload is requested.'
+      : caseStatus === 'REJECTED'
+        ? 'The reviewer rejected this submission. You can upload another document to start a new review.'
+        : 'Your previous KYC review is complete. You can upload another document to start a new attempt.';
+
+    return (
+      <div className="max-w-3xl mx-auto space-y-6">
+        <div className="flex items-center gap-3">
+          <Link to="/dashboard" className="p-2.5 rounded-xl bg-white border border-slate-200 text-slate-600 hover:text-sbi-blue transition shadow-sm">
+            <ArrowLeft className="w-5 h-5" />
+          </Link>
+          <div>
+            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Document upload unavailable</h1>
+            <p className="text-xs text-slate-500">Your current KYC case does not allow another upload.</p>
+          </div>
+        </div>
+        <div className="p-5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-4">
+          <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+          <p className="text-sm leading-relaxed">{blockedMessage}</p>
+        </div>
+        <Link to="/dashboard" className="inline-flex items-center gap-2 text-sm font-semibold text-sbi-accent hover:underline">
+          Return to dashboard
+        </Link>
+      </div>
+    );
+  }
   return (
     <div className="max-w-3xl mx-auto space-y-6">
       <div className="flex items-center gap-3">

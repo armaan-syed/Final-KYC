@@ -72,6 +72,7 @@ export interface KYCAttempt {
 export interface KYCStatusResponse {
   kyc_case_id: string;
   status: CaseKYCStatus;
+  upload_allowed?: boolean;
   latest_attempt?: KYCAttempt | null;
   rejection_reason?: string | null;
 }

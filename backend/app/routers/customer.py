@@ -87,11 +87,25 @@ def get_kyc_status(customer: Customer = Depends(get_current_customer), db: Sessi
         return CustomerKYCStatusResponse(
             kyc_case_id=UUID(int=0),
             status="PENDING",
+            upload_allowed=True,
             latest_attempt=None,
             rejection_reason=None,
         )
 
     latest = case.attempts[-1] if case.attempts else None
+    if case.status == "PENDING":
+        upload_allowed = latest is None
+    elif case.status in {"REUPLOAD_PENDING", "REUPLOAD_REQUESTED", "APPROVED", "REJECTED", "AUTO_VERIFIED"}:
+        upload_allowed = True
+    elif case.status == "PROCESSING":
+        upload_allowed = (
+            latest is not None
+            and latest.status == "PROCESSING"
+            and latest.document is None
+        )
+    else:
+        upload_allowed = False
+
     latest_attempt = None
     rejection_reason = None
     if latest:
@@ -119,6 +133,7 @@ def get_kyc_status(customer: Customer = Depends(get_current_customer), db: Sessi
     return CustomerKYCStatusResponse(
         kyc_case_id=case.id,
         status=case.status,
+        upload_allowed=upload_allowed,
         latest_attempt=latest_attempt,
         rejection_reason=rejection_reason,
     )

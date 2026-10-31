@@ -34,6 +34,10 @@ from app.services.sqs import enqueue_ocr_job
 logger = logging.getLogger(__name__)
 
 
+class UploadNotAllowedError(Exception):
+    """Raised when a customer tries to create a new attempt before review allows it."""
+
+
 class KYCService:
     def __init__(self, db: Session):
         self.db = db
@@ -68,19 +72,70 @@ class KYCService:
     ) -> UploadURLResponse:
         """Generate a presigned upload URL and create a PROCESSING attempt.
 
-        The attempt row is created here so the S3 key can include attempt_id.
-        If the customer never uploads, the attempt remains as an abandoned
-        PROCESSING attempt.
+        A new attempt is created for an initial or reviewer-requested upload.
+        If an upload URL was issued but no document was submitted, a retry reuses
+        that same attempt. Submitted documents remain locked while processing or
+        awaiting a reviewer decision.
         """
-        attempt_number = self._next_attempt_number(case)
-        attempt = KYCAttempt(
-            kyc_case_id=case.id,
-            attempt_number=attempt_number,
-            document_type=document_type,
-            status="PROCESSING",
+        locked_case = (
+            self.db.query(KYCCase)
+            .filter_by(id=case.id, customer_id=customer.id)
+            .with_for_update()
+            .populate_existing()
+            .first()
         )
-        self.db.add(attempt)
-        self.db.flush()
+        if locked_case is None:
+            raise LookupError("KYC case not found")
+        case = locked_case
+
+        latest_attempt = (
+            self.db.query(KYCAttempt)
+            .filter_by(kyc_case_id=case.id)
+            .order_by(KYCAttempt.attempt_number.desc())
+            .with_for_update()
+            .first()
+        )
+        reuse_attempt = False
+        attempt = None
+
+        if case.status == "PENDING" and latest_attempt is None:
+            pass
+        elif case.status in {"REUPLOAD_PENDING", "REUPLOAD_REQUESTED", "APPROVED", "REJECTED", "AUTO_VERIFIED"}:
+            pass
+        elif case.status == "PROCESSING" and latest_attempt is not None:
+            has_document = (
+                self.db.query(KYCDocument.id)
+                .filter_by(attempt_id=latest_attempt.id)
+                .first()
+                is not None
+            )
+            if latest_attempt.status == "PROCESSING" and not has_document:
+                # Retry the incomplete upload without creating another attempt.
+                attempt = latest_attempt
+                attempt.document_type = document_type
+                reuse_attempt = True
+            else:
+                raise UploadNotAllowedError(
+                    "A KYC document is already processing or awaiting review. Please wait "
+                    "for the reviewer to complete review. You can upload another document "
+                    "only after the reviewer requests a re-upload."
+                )
+        else:
+            raise UploadNotAllowedError(
+                "A KYC document is already processing or awaiting review. Please wait "
+                "for the reviewer to complete review. You can upload another document "
+                "only after the reviewer requests a re-upload."
+            )
+
+        if attempt is None:
+            attempt = KYCAttempt(
+                kyc_case_id=case.id,
+                attempt_number=self._next_attempt_number(case),
+                document_type=document_type,
+                status="PROCESSING",
+            )
+            self.db.add(attempt)
+            self.db.flush()
 
         case.status = "PROCESSING"
         case.updated_at = datetime.now(timezone.utc)
@@ -92,7 +147,7 @@ class KYCService:
             kyc_case_id=case.id,
             attempt_id=attempt.id,
             actor=str(customer.cognito_sub),
-            action="SUBMITTED",
+            action="UPLOAD_URL_REISSUED" if reuse_attempt else "SUBMITTED",
             details={
                 "document_type": document_type,
                 "file_name": file_name,
