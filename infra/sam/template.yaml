@@ -50,7 +50,7 @@ Parameters:
     Type: String
     Default: http://localhost:3000
     AllowedPattern: '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$'
-    Description: Browser origin allowed to upload documents while CloudFront is disabled.
+    Description: Browser origin used when CloudFront is disabled and alongside CloudFront in dev.
   DatabaseSecretArn:
     Type: String
     Default: ''
@@ -103,6 +103,7 @@ Rules:
 Conditions:
   OCRWorkerEnabled: !Equals [!Ref EnableOCRWorker, 'true']
   DeployCloudFront: !Equals [!Ref EnableCloudFront, 'true']
+  IsDevEnvironment: !Equals [!Ref Environment, 'dev']
   HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, '']]
   HasRDSIdentifier: !Not [!Equals [!Ref RDSInstanceIdentifier, '']]
   HasBackendApiName: !Not [!Equals [!Ref BackendApiName, '']]
@@ -374,11 +375,14 @@ Resources:
               - '*'
             AllowedMethods:
               - PUT
-            AllowedOrigins:
+            AllowedOrigins: !If
+              - DeployCloudFront
               - !If
-                - DeployCloudFront
-                - !Sub 'https://${FrontendDistribution.DomainName}'
-                - !Ref FrontendAllowedOrigin
+                - IsDevEnvironment
+                - - !Sub 'https://${FrontendDistribution.DomainName}'
+                  - !Ref FrontendAllowedOrigin
+                - - !Sub 'https://${FrontendDistribution.DomainName}'
+              - - !Ref FrontendAllowedOrigin
             MaxAge: 3600
       LoggingConfiguration:
         DestinationBucketName: !Ref DocumentAccessLogsBucket
