@@ -141,7 +141,7 @@ export interface AuditResponse {
 
 export interface CaseDetail {
   kyc_case_id: string;
-  status: CaseKYCStatus;
+  status?: CaseKYCStatus;
   customer: {
     full_name: string;
     date_of_birth: string;
@@ -153,6 +153,7 @@ export interface CaseDetail {
   latest_attempt: {
     attempt_number: number;
     document_type: DocumentType;
+    status: AttemptKYCStatus;
     document_url?: string | null;
     extracted_fields?: Record<string, string>;
     field_comparisons?: FieldComparison[];
@@ -175,8 +176,8 @@ export interface DecisionRequest {
 
 export interface DecisionResponse {
   message: string;
-  kyc_case_id: string;
-  status: CaseKYCStatus;
+  decision: DecisionType;
+  decided_at: string;
 }
 
 export interface RegisterRequest {

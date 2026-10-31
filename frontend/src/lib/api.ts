@@ -230,15 +230,10 @@ export const apiGetCaseDetail = async (caseId: string): Promise<CaseDetail> => {
 
 export const apiSubmitDecision = async (caseId: string, data: DecisionRequest): Promise<DecisionResponse> => {
   if (isMockEnabled()) {
-    const statusMap = {
-      APPROVED: 'APPROVED' as const,
-      REJECTED: 'REJECTED' as const,
-      REUPLOAD_REQUESTED: 'REUPLOAD_PENDING' as const,
-    };
     return {
       message: `Decision ${data.decision} recorded successfully.`,
-      kyc_case_id: caseId,
-      status: statusMap[data.decision],
+      decision: data.decision,
+      decided_at: new Date().toISOString(),
     };
   }
   const res = await apiClient.post<DecisionResponse>(`/reviewer/cases/${caseId}/decide`, data);

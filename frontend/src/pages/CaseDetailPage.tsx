@@ -57,7 +57,7 @@ export default function CaseDetailPage() {
         decision,
         notes: decisionNotes,
       });
-      setDecisionFeedback(`Compliance decision [${res.status}] recorded successfully.`);
+      setDecisionFeedback(`Compliance decision [${res.decision}] recorded successfully.`);
       setTimeout(() => {
         fetchDetail();
       }, 1000);
@@ -83,6 +83,12 @@ export default function CaseDetailPage() {
     );
   }
 
+  const caseStatus = detail.status ?? (
+    detail.latest_attempt.status === 'REUPLOAD_REQUESTED'
+      ? 'REUPLOAD_PENDING'
+      : detail.latest_attempt.status
+  );
+
   return (
     <div className="space-y-8">
       {/* Top Dossier Header */}
@@ -99,7 +105,7 @@ export default function CaseDetailPage() {
               <span className="font-mono font-bold text-lg text-slate-900">
                 Case: {detail.kyc_case_id}
               </span>
-              <KYCStatusBadge status={detail.status} />
+              <KYCStatusBadge status={caseStatus} />
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
               Applicant: <strong className="text-slate-800">{detail.customer.full_name}</strong>

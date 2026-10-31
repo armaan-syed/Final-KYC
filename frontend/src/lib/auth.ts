@@ -3,6 +3,8 @@ import {
   signIn as amplifySignIn,
   confirmSignIn as amplifyConfirmSignIn,
   signOut as amplifySignOut,
+  resetPassword as amplifyResetPassword,
+  confirmResetPassword as amplifyConfirmResetPassword,
   fetchAuthSession,
 } from 'aws-amplify/auth';
 import { LoginRequest, LoginResponse } from '@/types';
@@ -158,6 +160,36 @@ export async function completeNewPasswordSignIn(
 
   const session = await fetchAuthSession();
   return persistLoginSession(req, role, session);
+}
+
+export async function requestPasswordReset(
+  email: string,
+  role: 'customer' | 'reviewer',
+): Promise<void> {
+  if (isMockEnabled()) {
+    throw new Error('Password reset requires Cognito authentication. Disable mock authentication and try again.');
+  }
+
+  configureAmplify(role);
+  await amplifyResetPassword({ username: email });
+}
+
+export async function confirmPasswordReset(
+  email: string,
+  confirmationCode: string,
+  newPassword: string,
+  role: 'customer' | 'reviewer',
+): Promise<void> {
+  if (isMockEnabled()) {
+    throw new Error('Password reset requires Cognito authentication. Disable mock authentication and try again.');
+  }
+
+  configureAmplify(role);
+  await amplifyConfirmResetPassword({
+    username: email,
+    confirmationCode,
+    newPassword,
+  });
 }
 
 export async function logoutUser() {

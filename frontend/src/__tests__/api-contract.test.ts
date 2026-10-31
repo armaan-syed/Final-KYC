@@ -22,7 +22,7 @@ vi.mock('../lib/auth', () => ({
   isMockEnabled: vi.fn(() => false),
 }));
 
-import { apiConfirm, apiGetCaseAudit, apiRegister } from '../lib/api';
+import { apiConfirm, apiGetCaseAudit, apiRegister, apiSubmitDecision } from '../lib/api';
 
 describe('frontend API contracts', () => {
   beforeEach(() => {
@@ -68,5 +68,21 @@ describe('frontend API contracts', () => {
 
     await expect(apiGetCaseAudit('synthetic-case-id')).resolves.toEqual(response);
     expect(client.get).toHaveBeenCalledWith('/reviewer/cases/synthetic-case-id/audit');
+  });
+
+  it('keeps the reviewer decision response contract returned by FastAPI', async () => {
+    const request = { decision: 'APPROVED' as const, notes: 'Synthetic acceptance case.' };
+    const response = {
+      message: 'Decision recorded.',
+      decision: 'APPROVED',
+      decided_at: '2026-10-31T00:00:00Z',
+    };
+    client.post.mockResolvedValue({ data: response });
+
+    await expect(apiSubmitDecision('synthetic-case-id', request)).resolves.toEqual(response);
+    expect(client.post).toHaveBeenCalledWith(
+      '/reviewer/cases/synthetic-case-id/decide',
+      request,
+    );
   });
 });

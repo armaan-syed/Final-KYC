@@ -14,12 +14,17 @@ import {
   User,
   Shield,
 } from 'lucide-react';
-import { completeNewPasswordSignIn, loginUser } from '@/lib/auth';
+import {
+  completeNewPasswordSignIn,
+  confirmPasswordReset,
+  loginUser,
+  requestPasswordReset,
+} from '@/lib/auth';
 import { ErrorAlert } from '@/components/ui/Alerts';
 
 const loginSchema = z.object({
   email: z.string().email('Please enter a valid official email address'),
-  password: z.string().min(1, 'Please enter your password'),
+  password: z.string(),
   confirmPassword: z.string().optional(),
   role: z.enum(['customer', 'reviewer']),
 });
@@ -33,6 +38,10 @@ export default function LoginPage() {
   const [newPasswordRequired, setNewPasswordRequired] = useState(false);
   const [challengeEmail, setChallengeEmail] = useState('');
   const [challengeRole, setChallengeRole] = useState<'customer' | 'reviewer'>('customer');
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const [resetCodeSent, setResetCodeSent] = useState(false);
+  const [resetCode, setResetCode] = useState('');
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const {
     register,
@@ -54,8 +63,56 @@ export default function LoginPage() {
 
   const onSubmit = async (data: LoginFormData) => {
     setErrorMessage(null);
+    setSuccessMessage(null);
     setLoading(true);
     try {
+      if (resettingPassword && !resetCodeSent) {
+        try {
+          await requestPasswordReset(data.email, data.role);
+        } catch {
+          setErrorMessage('Unable to start password reset. Check the email address and try again shortly.');
+          return;
+        }
+        setResetCodeSent(true);
+        setSuccessMessage('If an account exists for this email, Cognito has sent a password reset code.');
+        return;
+      }
+
+      if (resettingPassword && resetCodeSent) {
+        const hasRequiredComplexity =
+          data.password.length >= 8 &&
+          /[A-Z]/.test(data.password) &&
+          /[a-z]/.test(data.password) &&
+          /\d/.test(data.password) &&
+          /[^A-Za-z0-9]/.test(data.password);
+        if (!hasRequiredComplexity) {
+          setErrorMessage('Use at least 8 characters with uppercase, lowercase, a number, and a symbol.');
+          return;
+        }
+        if (data.password !== data.confirmPassword) {
+          setErrorMessage('The new passwords do not match.');
+          return;
+        }
+        if (!resetCode.trim()) {
+          setErrorMessage('Enter the password reset code sent to your email.');
+          return;
+        }
+
+        await confirmPasswordReset(data.email, resetCode.trim(), data.password, data.role);
+        setResettingPassword(false);
+        setResetCodeSent(false);
+        setResetCode('');
+        setValue('password', '');
+        setValue('confirmPassword', '');
+        setSuccessMessage('Password reset successfully. Sign in with your new password.');
+        return;
+      }
+
+      if (!data.password) {
+        setErrorMessage('Please enter your password.');
+        return;
+      }
+
       let role = data.role;
       if (newPasswordRequired) {
         const hasRequiredComplexity =
@@ -95,10 +152,34 @@ export default function LoginPage() {
         navigate('/dashboard');
       }
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Login failed. Please verify credentials.');
+      setErrorMessage(
+        resettingPassword
+          ? 'Password reset failed. Check the email code and new password, then try again.'
+          : err?.message || 'Login failed. Please verify credentials.',
+      );
     } finally {
       setLoading(false);
     }
+  };
+
+  const startPasswordReset = () => {
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    setResetCodeSent(false);
+    setResetCode('');
+    setResettingPassword(true);
+    setValue('password', '');
+    setValue('confirmPassword', '');
+  };
+
+  const cancelPasswordReset = () => {
+    setErrorMessage(null);
+    setSuccessMessage(null);
+    setResettingPassword(false);
+    setResetCodeSent(false);
+    setResetCode('');
+    setValue('password', '');
+    setValue('confirmPassword', '');
   };
 
   return (
@@ -175,7 +256,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => setValue('role', 'customer')}
-                disabled={newPasswordRequired}
+                disabled={newPasswordRequired || resettingPassword}
                 className={`py-2.5 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 ${
                   selectedRole === 'customer'
                     ? 'bg-white text-sbi-blue shadow-sm'
@@ -188,7 +269,7 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => setValue('role', 'reviewer')}
-                disabled={newPasswordRequired}
+                disabled={newPasswordRequired || resettingPassword}
                 className={`py-2.5 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2 ${
                   selectedRole === 'reviewer'
                     ? 'bg-white text-sbi-blue shadow-sm'
@@ -204,16 +285,22 @@ export default function LoginPage() {
               <h3 className="text-xl font-bold text-slate-900">
                 {newPasswordRequired
                   ? 'Set Your Permanent Password'
-                  : selectedRole === 'customer'
-                    ? 'Sign In to Your Account'
-                    : 'Reviewer Desk Authorization'}
+                  : resettingPassword
+                    ? resetCodeSent ? 'Choose a New Password' : 'Reset Your Password'
+                    : selectedRole === 'customer'
+                      ? 'Sign In to Your Account'
+                      : 'Reviewer Desk Authorization'}
               </h3>
               <p className="text-xs text-slate-500 mt-1">
                 {newPasswordRequired
                   ? 'Your administrator-issued temporary password was accepted. Set a new password to finish signing in.'
-                  : selectedRole === 'customer'
-                    ? 'Access your KYC application, document upload, and real-time status.'
-                    : 'Enter institutional credentials to inspect flagged KYC exceptions.'}
+                  : resettingPassword
+                    ? resetCodeSent
+                      ? 'Enter the email code and choose a new password for this portal.'
+                      : 'We will send a reset code to the email address associated with this account.'
+                    : selectedRole === 'customer'
+                      ? 'Access your KYC application, document upload, and real-time status.'
+                      : 'Enter institutional credentials to inspect flagged KYC exceptions.'}
               </p>
             </div>
 
@@ -223,9 +310,21 @@ export default function LoginPage() {
               </p>
             )}
 
+            {resettingPassword && resetCodeSent && (
+              <p className="mb-5 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs leading-relaxed text-blue-900">
+                Use the code sent to the email on this {selectedRole === 'reviewer' ? 'reviewer' : 'customer'} account. Your new password must be at least 8 characters and include uppercase and lowercase letters, a number, and a symbol.
+              </p>
+            )}
+
             {errorMessage && (
               <div className="mb-5">
                 <ErrorAlert message={errorMessage} />
+              </div>
+            )}
+
+            {successMessage && (
+              <div role="status" className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs leading-relaxed text-emerald-800">
+                {successMessage}
               </div>
             )}
 
@@ -237,7 +336,7 @@ export default function LoginPage() {
                 <input
                   type="email"
                   {...register('email')}
-                  readOnly={newPasswordRequired}
+                  readOnly={newPasswordRequired || resetCodeSent}
                   placeholder={selectedRole === 'customer' ? 'name@example.com' : 'officer@bank.internal'}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-sbi-accent focus:border-transparent transition-all shadow-sm"
                 />
@@ -246,22 +345,39 @@ export default function LoginPage() {
                 )}
               </div>
 
-              <div>
+              {resetCodeSent && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Email Reset Code
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={resetCode}
+                    onChange={(event) => setResetCode(event.target.value)}
+                    placeholder="Enter the code from your email"
+                    className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-sbi-accent focus:border-transparent transition-all shadow-sm"
+                  />
+                </div>
+              )}
+
+              {!resettingPassword || resetCodeSent ? <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  {newPasswordRequired ? 'New Password' : 'Password'}
+                  {newPasswordRequired || resettingPassword ? 'New Password' : 'Password'}
                 </label>
                 <input
                   type="password"
                   {...register('password')}
-                  placeholder={newPasswordRequired ? 'Choose a strong new password' : '••••••••••••'}
+                  placeholder={newPasswordRequired || resettingPassword ? 'Choose a strong new password' : '••••••••••••'}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-sbi-accent focus:border-transparent transition-all shadow-sm"
                 />
                 {errors.password && (
                   <p className="mt-1 text-xs text-rose-600 font-medium">{errors.password.message}</p>
                 )}
-              </div>
+              </div> : null}
 
-              {newPasswordRequired && (
+              {(newPasswordRequired || (resettingPassword && resetCodeSent)) && (
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                     Confirm New Password
@@ -281,17 +397,43 @@ export default function LoginPage() {
                 className="w-full mt-2 py-3 px-4 rounded-xl bg-gradient-to-r from-sbi-blue to-sbi-accent text-white font-bold text-sm hover:from-sbi-navy hover:to-blue-600 transition-all shadow-lg shadow-blue-900/20 flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 {loading ? (
-                  <span>Authenticating Session...</span>
+                  <span>{resettingPassword ? 'Processing Password Reset...' : 'Authenticating Session...'}</span>
                 ) : (
                   <>
-                    <span>{newPasswordRequired ? 'Set Password & Sign In' : 'Proceed Securely'}</span>
+                    <span>
+                      {newPasswordRequired
+                        ? 'Set Password & Sign In'
+                        : resettingPassword
+                          ? resetCodeSent ? 'Reset Password' : 'Send Reset Code'
+                          : 'Proceed Securely'}
+                    </span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}
               </button>
             </form>
 
-            <div className="mt-6 pt-5 border-t border-slate-100 flex items-center justify-between text-xs">
+            {!newPasswordRequired && resettingPassword && (
+              <button
+                type="button"
+                onClick={cancelPasswordReset}
+                className="mt-4 w-full text-xs font-bold text-sbi-accent hover:underline"
+              >
+                Back to sign in
+              </button>
+            )}
+
+            {!newPasswordRequired && !resettingPassword && (
+              <button
+                type="button"
+                onClick={startPasswordReset}
+                className="mt-4 w-full text-right text-xs font-bold text-sbi-accent hover:underline"
+              >
+                Forgot password?
+              </button>
+            )}
+
+            {!resettingPassword && <div className="mt-6 pt-5 border-t border-slate-100 flex items-center justify-between text-xs">
               {selectedRole === 'customer' ? (
                 <>
                   <span className="text-slate-500">First time applicant?</span>
@@ -304,7 +446,7 @@ export default function LoginPage() {
                   Institutional reviewer accounts are configured via Cognito User Pool (us-east-1_IQzz0ktCu).
                 </div>
               )}
-            </div>
+            </div>}
           </div>
         </div>
       </main>

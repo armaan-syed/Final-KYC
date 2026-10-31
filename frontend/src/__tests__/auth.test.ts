@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Amplify } from 'aws-amplify';
 
 const authMocks = vi.hoisted(() => ({
   signIn: vi.fn(),
   confirmSignIn: vi.fn(),
   signOut: vi.fn(),
+  resetPassword: vi.fn(),
+  confirmResetPassword: vi.fn(),
   fetchAuthSession: vi.fn(),
 }));
 
@@ -13,7 +16,12 @@ vi.mock('aws-amplify', () => ({
 
 vi.mock('aws-amplify/auth', () => authMocks);
 
-import { completeNewPasswordSignIn, loginUser } from '../lib/auth';
+import {
+  completeNewPasswordSignIn,
+  confirmPasswordReset,
+  loginUser,
+  requestPasswordReset,
+} from '../lib/auth';
 
 describe('Cognito reviewer sign-in', () => {
   beforeEach(() => {
@@ -65,5 +73,46 @@ describe('Cognito reviewer sign-in', () => {
       loginUser({ email: 'reviewer@example.invalid', password: 'StrongPass9!' }, 'reviewer'),
     ).rejects.toThrow('Additional authentication is required');
     expect(authMocks.fetchAuthSession).not.toHaveBeenCalled();
+  });
+
+  it('requests a reset code from the selected reviewer user pool', async () => {
+    authMocks.resetPassword.mockResolvedValue({
+      isPasswordReset: false,
+      nextStep: { resetPasswordStep: 'CONFIRM_RESET_PASSWORD_WITH_CODE' },
+    });
+
+    await requestPasswordReset('reviewer@example.invalid', 'reviewer');
+
+    expect(authMocks.resetPassword).toHaveBeenCalledWith({ username: 'reviewer@example.invalid' });
+    expect(Amplify.configure).toHaveBeenCalledWith({
+      Auth: {
+        Cognito: {
+          userPoolId: 'us-east-1_IQzz0ktCu',
+          userPoolClientId: '5fh52722t9o0le48pieqavtcv0',
+          signUpVerificationMethod: 'code',
+        },
+      },
+    });
+  });
+
+  it('confirms a password reset through Cognito using the selected customer pool', async () => {
+    authMocks.confirmResetPassword.mockResolvedValue(undefined);
+
+    await confirmPasswordReset('customer@example.invalid', '123456', 'StrongPass9!', 'customer');
+
+    expect(authMocks.confirmResetPassword).toHaveBeenCalledWith({
+      username: 'customer@example.invalid',
+      confirmationCode: '123456',
+      newPassword: 'StrongPass9!',
+    });
+    expect(Amplify.configure).toHaveBeenCalledWith({
+      Auth: {
+        Cognito: {
+          userPoolId: 'us-east-1_8Q9onMEne',
+          userPoolClientId: '1rtg8t1nbggjsf2i0d8g7jqqov',
+          signUpVerificationMethod: 'code',
+        },
+      },
+    });
   });
 });

@@ -133,6 +133,7 @@ export const mockCaseDetailMap: Record<string, CaseDetail> = {
     latest_attempt: {
       attempt_number: 1,
       document_type: 'AADHAAR',
+      status: 'REVIEW_REQUIRED',
       document_url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
       extracted_fields: {
         name: 'ARMAAN SYED',
