@@ -2,44 +2,51 @@
 
 Pramāṇa is a web application for customer identity-document submission and reviewer-led KYC decisions. Customers manage their profile, upload Aadhaar or PAN documents, and follow case status. Reviewers inspect cases that need attention and record a decision.
 
+## Use the deployed application
+
+- **Website:** [Open Pramāṇa](https://d231rykprgnarh.cloudfront.net)
+- **API Gateway base URL:** [https://rimait7lg7.execute-api.us-east-1.amazonaws.com/dev](https://rimait7lg7.execute-api.us-east-1.amazonaws.com/dev)
+
+For normal use, open the website. The deployed frontend calls the API Gateway backend; the API URL is provided for integration and troubleshooting, not as a separate user interface. No local installation is needed to use the deployed application.
+
+The project runbooks report a synthetic end-to-end API, upload, OCR, and reviewer flow. SES production email access and SNS SMS activation are not available, so real notification delivery is not verified. See [infra/README.md](infra/README.md) for the dated deployment status.
 ## Architecture
 
 The application’s AWS resources are primarily deployed in **US East (N. Virginia), us-east-1**. CloudFront is a global service.
 
 ```mermaid
 flowchart LR
-    browser["Customer or reviewer"]
-    cloudfront["CloudFront"]
-    frontend["Private frontend S3"]
-    cognito["Cognito"]
-    api["API Gateway"]
-    backend["Backend Lambda / FastAPI"]
-    documents["Private document S3"]
-    queue["SQS OCR queue and DLQ"]
-    worker["OCR worker Lambda"]
-    database[("RDS PostgreSQL")]
-    notifications["SES and SNS"]
-    cloudwatch["CloudWatch"]
+    browser["Customer or reviewer browser"]
+    cloudfront["CloudFront<br/>HTTPS delivery"]
+    frontend["Private S3 frontend bucket"]
+    cognito["Amazon Cognito<br/>customer and reviewer pools"]
+    api["API Gateway<br/>REST API"]
+    backend["Backend Lambda<br/>FastAPI + Mangum<br/>Python 3.11"]
+    documents["Private S3 document bucket"]
+    queue["Amazon SQS<br/>OCR queue + DLQ"]
+    worker["OCR worker Lambda<br/>Python 3.12"]
+    database[("Amazon RDS<br/>PostgreSQL")]
+    notify["Amazon SES / SNS"]
+    monitor["Amazon CloudWatch"]
 
-    browser -->|load app| cloudfront
-    cloudfront -->|OAC| frontend
-    browser -->|sign in| cognito
-    cognito -->|access token| browser
-    browser -->|API request with token| api
+    browser -->|"load the web app"| cloudfront
+    cloudfront -->|"Origin Access Control"| frontend
+    browser <-->|"sign in; receive access token"| cognito
+    browser -->|"HTTPS API requests + bearer token"| api
     api --> backend
-    backend -->|presigned upload URL| browser
-    browser -->|direct file upload| documents
-    backend -->|check submitted file| documents
-    backend -->|profiles and KYC records| database
-    backend -->|enqueue after submit| queue
-    queue -->|invoke worker| worker
-    worker -->|read document| documents
-    worker -->|save OCR result| database
-    backend -.-> notifications
-    worker -.-> notifications
-    backend -.-> cloudwatch
-    worker -.-> cloudwatch
-    api -.-> cloudwatch
+    backend -->|"create short-lived upload URL"| browser
+    browser -->|"upload file directly"| documents
+    backend -->|"check submitted object; issue preview URL"| documents
+    backend -->|"profiles, cases, decisions, audit"| database
+    backend -->|"enqueue after POST /kyc/submit"| queue
+    queue -->|"SQS event source mapping"| worker
+    worker -->|"read submitted document"| documents
+    worker -->|"save OCR results and status"| database
+    backend -.-> notify
+    worker -.-> notify
+    backend -.-> monitor
+    worker -.-> monitor
+    api -.-> monitor
 ```
 
 ### Components
@@ -108,7 +115,11 @@ Useful entry points:
 - backend/template.yaml — backend API Lambda and API Gateway component.
 - backend/infrastructure/database.yaml — PostgreSQL database component.
 
-## Requirements
+## Optional local development
+
+The following setup is for contributors who need to change or debug the application locally. It is not required to use the deployed website above.
+
+### Local requirements
 
 - Node.js and npm for the frontend.
 - Python 3.11 or later for the backend (the deployed backend Lambda uses Python 3.11).
@@ -116,7 +127,7 @@ Useful entry points:
 - Docker plus Linux, macOS, WSL, or another Bash environment to build the OCR Lambda layer.
 - AWS credentials and permissions only for real AWS integration or deployment.
 
-## Run the frontend locally
+### Run the frontend locally
 
 In PowerShell:
 
@@ -145,7 +156,7 @@ npm run build
 
 The production output is written to frontend/dist/. Values prefixed with VITE_ are embedded in browser assets and must be treated as public configuration, never as secrets.
 
-## Run the backend locally
+### Run the backend locally
 
 The UI can run in mock mode without the API. A real backend workflow needs a reachable PostgreSQL database and suitable Cognito/AWS configuration. The deployed RDS database is private; a local machine needs an approved network path or a local development database.
 
